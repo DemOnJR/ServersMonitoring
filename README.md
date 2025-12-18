@@ -1,44 +1,26 @@
-# ITSchool Project 1
+# Server Monitor
 
-Servers Monitoring   
-Demo: [https://itschool.pbcv.dev/](https://itschool.pbcv.dev/)
+**Menu:**  
+[License](LICENSE) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · [Hosted Version](#hosted-version)
 
-## Requirements
+---
 
-### VPS
-```c++
-root (access)
-ipv4
-*curl
-*crontab
-```
+Lightweight, self-hosted server monitoring tool (single-user).
 
-### Webhost
-```c++
-*PHP 8.4
- - *SQLITE MODULE
-```
+---
 
-## Install   
-```bash
-sqlite3 db/monitor.sqlite < sql/schema.sql
-```
+## Latest Release
 
-## Todo (Maybe 🤣)
-- Alert System (Discord, Email)
-  - Down
-  - Network Attack (DDoS Detection)
-  - Services (Extra)
-    - Error, Down
+<!-- CHANGELOG:START -->
+<!-- CHANGELOG:END -->
 
-- *Services Monitoring (Extra)
-  - Services list
-  - Service page
-    - Uptime, Logs (Filter Errors)
+> For the full history, see the [Changelog](CHANGELOG.md).
 
-- Discord Server Alerts Manager (Extra)
-  - Create / Choose Channel
-    - Permission Groups
+---
 
-- N8N Auto Solve issues (Extra)
-  - todo
+## Hosted Version
+
+A hosted, multi-user version with advanced features is available at:  
+@todo
+
+The hosted service is not open source and is governed by separate Terms of Service.

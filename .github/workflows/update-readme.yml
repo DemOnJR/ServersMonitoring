@@ -1,0 +1,33 @@
+name: Update README from CHANGELOG
+
+on:
+  push:
+    paths:
+      - CHANGELOG.md
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract latest changelog
+        run: |
+          awk '/^## \[/{if (++n==1) print; else exit} {print}' CHANGELOG.md > latest.txt
+
+      - name: Update README
+        run: |
+          sed -i '/<!-- CHANGELOG:START -->/,/<!-- CHANGELOG:END -->/{
+          /<!-- CHANGELOG:START -->/!{
+          /<!-- CHANGELOG:END -->/!d
+          }}' README.md
+
+          sed -i '/<!-- CHANGELOG:START -->/r latest.txt' README.md
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add README.md
+          git commit -m "docs: update latest release in README"
+          git push
