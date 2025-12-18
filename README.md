@@ -12,10 +12,10 @@ Lightweight, self-hosted server monitoring tool (single-user).
 ## Latest Release
 
 <!-- CHANGELOG:START -->
-## [v1.0.1] - 2025-12-18 18:30
+## [v1.0.2] - 2025-12-18 18:30
 
 ### Added
-- Single-user dashboard
+- Update Charts
 
 ---
 
