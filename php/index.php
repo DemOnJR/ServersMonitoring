@@ -139,7 +139,7 @@ function maskHostname(string $hostname): string
 
 <head>
   <meta charset="UTF-8">
-  <title>Server Monitor</title>
+  <title>Servers Monitoring</title>
 
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -183,8 +183,7 @@ function maskHostname(string $hostname): string
 
   <nav class="navbar navbar-dark bg-dark mb-4">
     <div class="container">
-      <span class="navbar-brand mb-0 h1"><a href="" class="text-decoration-none text-white">Centralized Server
-          Monitor</a></span>
+      <span class="navbar-brand mb-0 h1"><a href="" class="text-decoration-none text-white">Servers Monitoring</a></span>
     </div>
   </nav>
 

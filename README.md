@@ -1,4 +1,4 @@
-# Server Monitor
+# Servers Monitoring
 
 A lightweight, self-hosted server monitoring tool built for simplicity, performance, and full control.
 
