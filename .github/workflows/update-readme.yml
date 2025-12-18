@@ -26,8 +26,8 @@ jobs:
 
       - name: Commit changes
         run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          git config user.name "Pipiasi Bogdan"
+          git config user.email "pipiasibogdan@gmail.com"
           git add README.md
           git commit -m "docs: update latest release in README"
           git push
