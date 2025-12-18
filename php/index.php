@@ -1,6 +1,25 @@
 <?php
 require_once 'config.php';
 
+// ================================
+// Auto Reditect to INSTALL
+// ================================
+function isDatabaseInstalled(PDO $db): bool
+{
+  try {
+    // verific?m existen?a tabelei critice
+    $db->query("SELECT 1 FROM servers LIMIT 1");
+    return true;
+  } catch (PDOException $e) {
+    return false;
+  }
+}
+
+if (!isDatabaseInstalled($db)) {
+  header('Location: /installer/install.php');
+  exit;
+}
+
 /*
   AJAX: SAVE DISPLAY NAME
 */
@@ -186,15 +205,30 @@ function maskHostname(string $hostname): string
     </div>
 
     <!-- INSTALL -->
+    <?php
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $baseUrl = $scheme . '://' . $_SERVER['HTTP_HOST'];
+    $cmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
+    ?>
+
     <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white"><strong>Install monitoring agent</strong></div>
+      <div class="card-header bg-white">
+        <strong>Install monitoring agent</strong>
+      </div>
+
       <div class="card-body">
-        <pre class="bg-dark text-light pt-3 ps-2 rounded position-relative"><code id="installCmd">curl -fsSL https://itschool.pbcv.dev/install.sh | sudo bash</code>
-<button class="btn btn-sm btn-outline-light position-absolute top-0 end-0 m-2"
-onclick="navigator.clipboard.writeText(document.getElementById('installCmd').innerText)">Copy</button>
-</pre>
+        <div class="position-relative bg-dark text-light rounded px-3 py-2">
+          <pre class="mb-0"><code id="installCmd"><?= htmlspecialchars($cmd) ?></code></pre>
+
+          <button type="button"
+            class="btn btn-sm btn-outline-light position-absolute top-50 end-0 translate-middle-y me-1"
+            onclick="navigator.clipboard.writeText(document.getElementById('installCmd').innerText)">
+            Copy
+          </button>
+        </div>
       </div>
     </div>
+
 
     <!-- TABLE -->
     <div class="card shadow-sm">
