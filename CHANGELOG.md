@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [v1.0.3] - 2025-12-18 20:46
+
+### Added
+- Automatic URL for installation
+- 1 Layer for Security db dir
+
+---
+
 ## [v1.0.2] - 2025-12-18 18:30
 
 ### Added
