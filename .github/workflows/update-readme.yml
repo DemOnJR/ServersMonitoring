@@ -5,6 +5,9 @@ on:
     paths:
       - CHANGELOG.md
 
+permissions:
+  contents: write
+
 jobs:
   update-readme:
     runs-on: ubuntu-latest
@@ -26,8 +29,8 @@ jobs:
 
       - name: Commit changes
         run: |
-          git config user.name "Pipiasi Bogdan"
-          git config user.email "pipiasibogdan@gmail.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@users.noreply.github.com"
           git add README.md
-          git commit -m "docs: update latest release in README"
+          git commit -m "docs: update latest release in README" || exit 0
           git push
