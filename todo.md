@@ -1,4 +1,4 @@
-# ITSchool Project 1
+# ITSchool Project
 
 Servers Monitoring   
 Demo: [https://itschool.pbcv.dev/](https://itschool.pbcv.dev/)
