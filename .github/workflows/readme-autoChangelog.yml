@@ -1,0 +1,57 @@
+name: Update README from CHANGELOG
+
+on:
+  push:
+    paths:
+      - CHANGELOG.md
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # Extract ONLY the latest released version section
+      # --------------------------------------------------
+      - name: Extract latest changelog entry
+        run: |
+          awk '
+            /^## \[/ {
+              if (found) exit
+              found=1
+            }
+            found { print }
+          ' CHANGELOG.md > latest.txt
+
+      # --------------------------------------------------
+      # Replace the section between markers in README
+      # --------------------------------------------------
+      - name: Update README latest release section
+        run: |
+          sed -i '/<!-- CHANGELOG:START -->/,/<!-- CHANGELOG:END -->/{
+            /<!-- CHANGELOG:START -->/!{
+              /<!-- CHANGELOG:END -->/!d
+            }
+          }' README.md
+
+          sed -i '/<!-- CHANGELOG:START -->/r latest.txt' README.md
+
+      # --------------------------------------------------
+      # Commit & push only if README changed
+      # --------------------------------------------------
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@users.noreply.github.com"
+
+          git add README.md
+          git diff --cached --quiet && exit 0
+
+          git commit -m "docs: sync latest release from changelog"
+          git push
