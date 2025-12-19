@@ -2,7 +2,7 @@
 
 A lightweight, self-hosted server monitoring tool built for simplicity, performance, and full control.
 
-**Live Demo:**
+**Live Demo**
 [https://servermonitor.pbcv.dev](https://servermonitor.pbcv.dev)
 
 ---
