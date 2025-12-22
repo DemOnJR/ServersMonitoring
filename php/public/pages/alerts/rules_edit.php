@@ -1,11 +1,11 @@
 <?php
-declare(strict_types=1);
+use Utils\Mask;
 
-require_once __DIR__ . '/../../../app/Bootstrap.php';
-
-use Auth\Guard;
-
-Guard::protect();
+/*
+|--------------------------------------------------------------------------
+| Alerts → Rule edit (CONTENT ONLY)
+|--------------------------------------------------------------------------
+*/
 
 $id = (int) ($_GET['id'] ?? 0);
 
@@ -13,9 +13,13 @@ $id = (int) ($_GET['id'] ?? 0);
    LOAD SERVERS
 ========================= */
 $servers = $db->query("
-  SELECT id, hostname
+  SELECT
+    id,
+    hostname,
+    display_name,
+    ip
   FROM servers
-  ORDER BY hostname
+  ORDER BY COALESCE(display_name, hostname)
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 /* =========================
@@ -63,11 +67,12 @@ $metricDefaults = [
 ];
 ?>
 
-<div class="card shadow-sm mb-4">
-  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
     <strong><?= $id > 0 ? 'Edit Alert' : 'Create Alert' ?></strong>
-    <a href="/settings/index.php?page=alerts/rules" class="btn btn-sm btn-outline-secondary">
-      <i class="fa-solid fa-arrow-left"></i> Back
+
+    <a href="/?page=alerts-rules" class="btn btn-sm btn-outline-secondary">
+      <i class="fa-solid fa-arrow-left me-1"></i> Back
     </a>
   </div>
 
@@ -78,7 +83,7 @@ $metricDefaults = [
       <input type="hidden" name="id" value="<?= (int) $id ?>">
 
       <!-- ALERT INFO -->
-      <div class="row mb-4 g-3">
+      <div class="row g-3 mb-4">
         <div class="col-md-5">
           <label class="form-label">Alert Title</label>
           <input class="form-control" name="title" required value="<?= htmlspecialchars((string) $alert['title']) ?>">
@@ -100,23 +105,24 @@ $metricDefaults = [
 
       <hr>
 
-      <!-- DISCORD RULES -->
+      <!-- RULES HEADER -->
       <div class="d-flex justify-content-between align-items-center mb-2">
         <h5 class="mb-0">
-          <i class="fa-brands fa-discord text-primary"></i> Discord Rules
+          <i class="fa-brands fa-discord me-1"></i> Discord Rules
         </h5>
 
         <button type="button" class="btn btn-outline-primary btn-sm" onclick="addRule()">
-          <i class="fa-solid fa-plus"></i> Add Rule
+          <i class="fa-solid fa-plus me-1"></i> Add Rule
         </button>
       </div>
 
-      <div class="text-muted mb-3">
-        Rules trigger based on the latest reported metrics. You can optionally mention <code>@here</code>,
-        <code>@everyone</code> or a role like <code>&lt;@&amp;ROLE_ID&gt;</code>.
+      <div class="text-muted mb-3 small">
+        Rules trigger based on the latest reported metrics.
       </div>
 
+      <!-- RULES -->
       <div id="rules">
+
         <?php foreach ($rules as $r):
           $selectedServers = $r['servers'] ? explode(',', (string) $r['servers']) : [];
           $cfg = json_decode((string) ($r['channel_config'] ?? '{}'), true) ?: [];
@@ -129,22 +135,24 @@ $metricDefaults = [
           <div class="card mb-3 rule border-start border-4 border-primary">
             <div class="card-body">
 
-              <!-- IMPORTANT: key used to map servers[...] for both existing + new rules -->
               <input type="hidden" name="rule_id[]" value="<?= (int) $r['id'] ?>">
               <input type="hidden" name="rule_key[]" value="<?= (int) $r['id'] ?>">
 
               <div class="row g-3">
+
                 <div class="col-md-4">
                   <label class="form-label">Alert Color</label>
                   <input type="color" class="form-control form-control-color" name="rule_color[]"
-                    value="<?= $r['color'] ? sprintf('#%06X', $r['color']) : '#e74c3c' ?>" title="Choose alert color">
+                    value="<?= $r['color'] ? sprintf('#%06X', $r['color']) : '#e74c3c' ?>">
                 </div>
 
                 <div class="col-md-4">
                   <label class="form-label">Metric</label>
                   <select class="form-select metric-select" name="metric[]">
                     <?php foreach (['cpu', 'ram', 'disk', 'network'] as $m): ?>
-                      <option value="<?= $m ?>" <?= ($metric === $m) ? 'selected' : '' ?>><?= strtoupper($m) ?></option>
+                      <option value="<?= $m ?>" <?= $metric === $m ? 'selected' : '' ?>>
+                        <?= strtoupper($m) ?>
+                      </option>
                     <?php endforeach ?>
                   </select>
                 </div>
@@ -153,7 +161,9 @@ $metricDefaults = [
                   <label class="form-label">Operator</label>
                   <select class="form-select" name="operator[]">
                     <?php foreach (['>', '>=', '<', '<='] as $op): ?>
-                      <option <?= ((string) $r['operator'] === $op) ? 'selected' : '' ?>><?= $op ?></option>
+                      <option <?= (string) $r['operator'] === $op ? 'selected' : '' ?>>
+                        <?= $op ?>
+                      </option>
                     <?php endforeach ?>
                   </select>
                 </div>
@@ -171,31 +181,30 @@ $metricDefaults = [
                   <div class="form-text">0 = send every time</div>
                 </div>
 
-
                 <div class="col-md-6">
                   <label class="form-label">Rule Title</label>
                   <input class="form-control rule-title" name="rule_title[]"
-                    value="<?= htmlspecialchars((string) ($r['title'] ?? '')) ?>"
+                    value="<?= htmlspecialchars((string) $r['title']) ?>"
                     placeholder="<?= htmlspecialchars($defTitle) ?>">
                 </div>
 
                 <div class="col-md-6">
                   <label class="form-label">Rule Description</label>
                   <input class="form-control rule-description" name="rule_description[]"
-                    value="<?= htmlspecialchars((string) ($r['description'] ?? '')) ?>"
+                    value="<?= htmlspecialchars((string) $r['description']) ?>"
                     placeholder="<?= htmlspecialchars($defDesc) ?>">
                 </div>
 
                 <div class="col-md-6">
                   <label class="form-label">Discord Webhook</label>
                   <input class="form-control webhook-input" name="discord_webhook[]"
-                    value="<?= htmlspecialchars($webhook) ?>" placeholder="https://discord.com/api/webhooks/...">
+                    value="<?= htmlspecialchars($webhook) ?>">
                 </div>
 
                 <div class="col-md-6">
-                  <label class="form-label">Mentions (optional)</label>
+                  <label class="form-label">Mentions</label>
                   <input class="form-control" name="rule_mentions[]"
-                    value="<?= htmlspecialchars((string) ($r['mentions'] ?? '')) ?>" placeholder="@here or <@&ROLE_ID>">
+                    value="<?= htmlspecialchars((string) $r['mentions']) ?>">
                 </div>
 
                 <div class="col-md-12">
@@ -203,19 +212,21 @@ $metricDefaults = [
                   <select class="form-select" name="servers[<?= (int) $r['id'] ?>][]" multiple>
                     <?php foreach ($servers as $s): ?>
                       <option value="<?= (int) $s['id'] ?>" <?= in_array((string) $s['id'], $selectedServers, true) ? 'selected' : '' ?>>
-                        <?= htmlspecialchars((string) $s['hostname']) ?>
+                        <?= htmlspecialchars(
+                          ($s['display_name'] ?: $s['hostname']) . ' - ' . Mask::ip($s['ip'])
+                        ) ?>
                       </option>
                     <?php endforeach ?>
                   </select>
                 </div>
 
-                <div class="col-md-12 d-flex justify-content-end gap-2 mt-2">
+                <div class="col-md-12 d-flex justify-content-end gap-2">
                   <button type="button" class="btn btn-outline-secondary btn-sm test-discord">
-                    <i class="fa-solid fa-bell"></i> Test
+                    Test
                   </button>
 
                   <button type="button" class="btn btn-outline-danger btn-sm delete-rule" data-id="<?= (int) $r['id'] ?>">
-                    <i class="fa-solid fa-trash"></i> Delete Rule
+                    Delete Rule
                   </button>
                 </div>
 
@@ -223,14 +234,16 @@ $metricDefaults = [
             </div>
           </div>
         <?php endforeach; ?>
+
       </div>
 
       <hr>
 
       <div class="d-flex justify-content-end gap-2">
-        <a href="/settings/index.php?page=alerts/rules" class="btn btn-secondary">Cancel</a>
+        <a href="/?page=alerts-rules" class="btn btn-secondary">Cancel</a>
         <button class="btn btn-primary">Save Alert</button>
       </div>
+
     </form>
   </div>
 </div>
@@ -337,7 +350,11 @@ $metricDefaults = [
               <label class="form-label">Target Servers</label>
               <select class="form-select" name="servers[${key}][]" multiple>
                 <?php foreach ($servers as $s): ?>
-                  <option value="<?= (int) $s['id'] ?>"><?= htmlspecialchars((string) $s['hostname']) ?></option>
+                  <option value="<?= (int) $s['id'] ?>">
+                    <?= htmlspecialchars(
+                      ($s['display_name'] ?: $s['hostname']) . ' - ' . Mask::ip($s['ip'])
+                    ) ?>
+                  </option>
                 <?php endforeach ?>
               </select>
             </div>
@@ -441,12 +458,18 @@ $metricDefaults = [
         showAlert('Alert saved', 'success');
 
         // if it was a new alert, redirect to edit page with the new id
-        if (d.alertId && (!<?= (int) $id ?> || <?= (int) $id ?> <= 0)) {
-          setTimeout(() => location.href = '/settings/index.php?page=alerts/rule_edit&id=' + d.alertId, 600);
+        if (d.alertId && (<?= (int) $id ?> <= 0)) {
+          setTimeout(() => {
+            location.href = '/?page=alerts-edit&id=' + d.alertId;
+          }, 600);
           return;
         }
 
-        setTimeout(() => location.href = '/settings/index.php?page=alerts/rules', 600);
+        // otherwise go back to rules list
+        setTimeout(() => {
+          location.href = '/?page=alerts-rules';
+        }, 600);
+
       })
       .catch(() => showAlert('Network error', 'danger'));
   });

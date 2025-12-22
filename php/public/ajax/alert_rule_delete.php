@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../app/Bootstrap.php';
+require_once __DIR__ . '/../../App/Bootstrap.php';
 
 use Auth\Guard;
 
@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
   exit;
 }
 
-$ruleId = (int)($_POST['id'] ?? 0);
+$ruleId = (int) ($_POST['id'] ?? 0);
 
 if ($ruleId <= 0) {
   http_response_code(400);
@@ -28,15 +28,15 @@ $db->beginTransaction();
 try {
   // delete targets
   $db->prepare("DELETE FROM alert_rule_targets WHERE rule_id = ?")
-     ->execute([$ruleId]);
+    ->execute([$ruleId]);
 
   // delete channels
   $db->prepare("DELETE FROM alert_rule_channels WHERE rule_id = ?")
-     ->execute([$ruleId]);
+    ->execute([$ruleId]);
 
   // delete rule
   $db->prepare("DELETE FROM alert_rules WHERE id = ?")
-     ->execute([$ruleId]);
+    ->execute([$ruleId]);
 
   $db->commit();
 

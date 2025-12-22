@@ -6,7 +6,7 @@ error_reporting(0);
 
 ob_start();
 
-require_once __DIR__ . '/../../app/Bootstrap.php';
+require_once __DIR__ . '/../../App/Bootstrap.php';
 
 use Auth\Guard;
 use Alert\Channel\DiscordChannel;

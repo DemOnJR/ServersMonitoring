@@ -1,239 +1,161 @@
 <?php
-declare(strict_types=1);
 
-require_once __DIR__ . '/../app/Bootstrap.php';
+require_once __DIR__ . '/../App/Bootstrap.php';
 
 use Auth\Guard;
-use Utils\Formatter;
-use Utils\Mask;
-use Server\ServerRepository;
 
-// 🔐 Protect page
 Guard::protect();
 
-// 🛠️ Redirect to installer if DB not ready
-try {
-  $db->query("SELECT 1 FROM servers LIMIT 1");
-} catch (Throwable) {
-  header('Location: /install/index.php');
-  exit;
+/**
+ * ROUTES (SAFE WHITELIST)
+ */
+$routes = [
+  'dashboard' => 'dashboard.php',
+
+  // servers
+  'servers' => 'servers/servers.php',
+  'server' => 'servers/server.php',
+
+  // alerts
+  'alerts-general' => 'alerts/general.php',
+  'alerts-rules' => 'alerts/rules.php',
+  'alerts-edit' => 'alerts/rules_edit.php',
+];
+
+$page = $_GET['page'] ?? 'dashboard';
+
+if (!isset($routes[$page])) {
+  http_response_code(404);
+  exit('Page not found');
 }
 
-// 📦 Load servers + last metrics
-$repo = new ServerRepository($db);
-$servers = $repo->fetchAllWithLastMetric();
+$contentFile = __DIR__ . '/pages/' . $routes[$page];
 
-// 📊 Summary
-$total = count($servers);
-$online = count(array_filter($servers, fn($s) => $s['diff'] < OFFLINE_THRESHOLD));
-$offline = $total - $online;
+// menu state
+$isServers = str_starts_with($page, 'server');
+$isAlerts = str_starts_with($page, 'alerts');
 ?>
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 
 <head>
   <meta charset="UTF-8">
-  <title>Servers Monitoring</title>
+  <title>Server Monitor</title>
 
+  <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+  <!-- DataTables (Bootstrap 5) -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
+  <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+
+  <!-- minimal admin polish -->
   <style>
     body {
-      background-color: #f5f6f8
+      background-color: var(--bs-body-bg);
     }
 
-    .card {
-      border-radius: .75rem
+    .sidebar {
+      width: 260px;
+      border-end: 1px solid var(--bs-border-color);
     }
 
-    .editable-name {
-      cursor: text
+    .sidebar .nav-link {
+      border-radius: .5rem;
+      padding: .55rem .75rem;
     }
 
-    .editable-name:focus {
-      outline: none;
-      background: #eef4ff
+    .sidebar .nav-link i {
+      width: 18px;
+      text-align: center;
+      margin-right: 6px;
     }
 
-    .gauge-wrap {
-      width: 64px;
-      text-align: center
-    }
-
-    .gauge-label {
-      font-size: .65rem;
-      margin-top: 2px
+    .submenu {
+      margin-left: 1.75rem;
+      padding-left: .75rem;
+      border-left: 1px solid var(--bs-border-color);
     }
   </style>
 </head>
 
 <body>
+  <div class="d-flex min-vh-100">
 
-  <nav class="navbar navbar-dark bg-dark mb-4">
-    <div class="container">
-      <a href="/" class="navbar-brand">Servers Monitoring</a>
-      <a href="/logout.php" class="btn btn-sm btn-outline-light">Logout</a>
-    </div>
-  </nav>
+    <!-- SIDEBAR -->
+    <aside class="sidebar p-3 bg-body-tertiary">
 
-  <div class="container">
+      <div class="fw-semibold mb-3">
+        <i class="fa-solid fa-gauge-high me-1"></i>
+        Server Monitor
+      </div>
 
-    <!-- SUMMARY -->
-    <div class="row mb-4">
-      <?php foreach ([['Total', $total], ['Online', $online], ['Offline', $offline]] as $i => $v): ?>
-        <div class="col-md-4">
-          <div class="card shadow-sm text-center <?= $i === 1 ? 'border-success' : ($i === 2 ? 'border-danger' : '') ?>">
-            <div class="card-body">
-              <small class="text-muted"><?= $v[0] ?></small>
-              <h2 class="<?= $i === 1 ? 'text-success' : ($i === 2 ? 'text-danger' : '') ?>">
-                <?= $v[1] ?>
-              </h2>
-            </div>
+      <hr>
+
+      <nav class="nav flex-column gap-1">
+
+        <a class="nav-link <?= $page === 'dashboard' ? 'active' : '' ?>" href="/?page=dashboard">
+          <i class="fa-solid fa-chart-line"></i>
+          Dashboard
+        </a>
+
+        <a class="nav-link <?= $isServers ? 'active' : '' ?>" href="/?page=servers">
+          <i class="fa-solid fa-server"></i>
+          Servers
+        </a>
+
+        <?php if ($isServers): ?>
+          <div class="submenu mt-1">
+            <a class="nav-link small <?= $page === 'servers' ? 'active' : '' ?>" href="/?page=servers">
+              <i class="fa-solid fa-list"></i>
+              All Servers
+            </a>
           </div>
-        </div>
-      <?php endforeach ?>
-    </div>
+        <?php endif; ?>
 
-    <!-- INSTALL CMD -->
-    <?php
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $baseUrl = $scheme . '://' . $_SERVER['HTTP_HOST'];
-    $cmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
-    ?>
+        <a class="nav-link <?= $isAlerts ? 'active' : '' ?>" href="/?page=alerts-general">
+          <i class="fa-solid fa-bell"></i>
+          Alerts
+        </a>
 
-    <div class="card shadow-sm mb-4">
-      <div class="card-header bg-white"><strong>Install monitoring agent</strong></div>
-      <div class="card-body">
-        <div class="bg-dark text-light rounded p-3 position-relative">
-          <pre class="mb-0"><code id="installCmd"><?= htmlspecialchars($cmd) ?></code></pre>
-          <button class="btn btn-sm btn-outline-light position-absolute top-50 end-0 translate-middle-y me-2"
-            onclick="navigator.clipboard.writeText(document.getElementById('installCmd').innerText)">
-            Copy
-          </button>
-        </div>
-      </div>
-    </div>
+        <?php if ($isAlerts): ?>
+          <div class="submenu mt-1">
+            <a class="nav-link small <?= $page === 'alerts-general' ? 'active' : '' ?>" href="/?page=alerts-general">
+              <i class="fa-solid fa-sliders"></i>
+              General
+            </a>
 
-    <!-- TABLE -->
-    <div class="card shadow-sm">
-      <div class="table-responsive">
-        <table class="table table-hover table-sm align-middle mb-0">
-          <thead class="table-light">
-            <tr>
-              <th>Server</th>
-              <th>IP</th>
-              <th>Usage</th>
-              <th>Status</th>
-              <th>Last Seen</th>
-            </tr>
-          </thead>
-          <tbody>
+            <a class="nav-link small <?= $page === 'alerts-rules' ? 'active' : '' ?>" href="/?page=alerts-rules">
+              <i class="fa-solid fa-diagram-project"></i>
+              Rules
+            </a>
+          </div>
+        <?php endif; ?>
 
-            <?php foreach ($servers as $s):
-              $isOnline = $s['diff'] < OFFLINE_THRESHOLD;
+      </nav>
 
-              $uptime = $s['first_seen']
-                ? Formatter::duration(time() - strtotime($s['first_seen']))
-                : '0m';
+      <hr class="mt-4">
 
-              $cpu = $isOnline ? min($s['cpu_load'] * 100, 100) : 0;
-              $ram = ($isOnline && $s['ram_total'] > 0)
-                ? round(($s['ram_used'] / $s['ram_total']) * 100)
-                : 0;
-              ?>
-              <tr>
-                <td>
-                  <strong class="editable-name" contenteditable data-id="<?= $s['id'] ?>">
-                    <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
-                  </strong><br>
-                  <small class="text-muted">
-                    <a href="server.php?id=<?= $s['id'] ?>" class="text-decoration-none">
-                      <?= Mask::hostname($s['hostname']) ?>
-                    </a>
-                  </small>
-                </td>
+      <a href="/logout.php" class="btn btn-sm btn-outline-secondary w-100">
+        <i class="fa-solid fa-right-from-bracket me-1"></i>
+        Logout
+      </a>
 
-                <td><?= Mask::ip($s['ip']) ?></td>
+    </aside>
 
-                <td>
-                  <div class="d-flex gap-2">
-                    <div class="gauge-wrap" data-bs-title="<?= $cpu ?>% CPU" data-bs-toggle="tooltip">
-                      <canvas id="cpu-<?= $s['id'] ?>" width="64" height="44"></canvas>
-                      <div class="gauge-label">CPU</div>
-                    </div>
-                    <div class="gauge-wrap" data-bs-title="<?= $ram ?>% RAM" data-bs-toggle="tooltip">
-                      <canvas id="ram-<?= $s['id'] ?>" width="64" height="44"></canvas>
-                      <div class="gauge-label">RAM</div>
-                    </div>
-                  </div>
-                </td>
-
-                <td>
-                  <?= $isOnline
-                    ? '<span class="badge bg-success">ONLINE</span>'
-                    : '<span class="badge bg-danger">OFFLINE</span>' ?>
-                </td>
-
-                <td><?= htmlspecialchars($s['last_seen']) ?></td>
-              </tr>
-
-              <script>
-                window._gauges = window._gauges || [];
-                window._gauges.push({ id: <?= $s['id'] ?>, cpu: <?= $cpu ?>, ram: <?= $ram ?> });
-              </script>
-
-            <?php endforeach ?>
-
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <!-- CONTENT -->
+    <main class="flex-grow-1 p-4">
+      <?php require $contentFile; ?>
+    </main>
 
   </div>
 
-  <script>
-    const centerText = {
-      id: 'centerText',
-      afterDraw(chart) {
-        const v = chart.data.datasets[0].data[0];
-        const p = chart.getDatasetMeta(0).data[0];
-        chart.ctx.font = 'bold 10px Arial';
-        chart.ctx.fillText(v + '%', p.x, p.y - 2);
-      }
-    };
-
-    function gauge(id, val, color) {
-      new Chart(document.getElementById(id), {
-        type: 'doughnut',
-        data: { datasets: [{ data: [val, 100 - val], backgroundColor: [color, '#eee'], borderWidth: 0 }] },
-        options: { responsive: false, rotation: -90, circumference: 180, cutout: '70%', plugins: { legend: false, tooltip: false } },
-        plugins: [centerText]
-      });
-    }
-
-    window._gauges.forEach(g => {
-      gauge('cpu-' + g.id, g.cpu, '#0d6efd');
-      gauge('ram-' + g.id, g.ram, '#198754');
-    });
-
-    document.querySelectorAll('.editable-name').forEach(el => {
-      el.addEventListener('blur', () => {
-        fetch('/ajax/server.php?action=saveName', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            id: el.dataset.id,
-            name: el.innerText.trim()
-          })
-        });
-      });
-    });
-
-  </script>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 
 </html>

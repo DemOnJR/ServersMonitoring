@@ -8,7 +8,7 @@ error_reporting(E_ALL);
 
 ob_start();
 
-require_once __DIR__ . '/../../app/Bootstrap.php';
+require_once __DIR__ . '/../../App/Bootstrap.php';
 
 use Auth\Guard;
 

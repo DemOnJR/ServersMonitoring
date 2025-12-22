@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../app/Bootstrap.php';
+require_once __DIR__ . '/../../App/Bootstrap.php';
 
 $installed = file_exists(__DIR__ . '/.installed');
 ?>

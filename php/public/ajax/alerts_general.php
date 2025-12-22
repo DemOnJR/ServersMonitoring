@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/../../app/Bootstrap.php';
+require_once __DIR__ . '/../../App/Bootstrap.php';
 
 $db->prepare("
   INSERT INTO settings(key,value)
