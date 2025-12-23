@@ -55,32 +55,96 @@ $isAlerts = str_starts_with($page, 'alerts');
   <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
   <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
 
-  <!-- minimal admin polish -->
   <style>
     body {
       background-color: var(--bs-body-bg);
     }
 
+    /* SIDEBAR */
     .sidebar {
       width: 260px;
       border-end: 1px solid var(--bs-border-color);
+      background: linear-gradient(180deg,
+          var(--bs-body-tertiary),
+          var(--bs-body-bg));
     }
 
+    .sidebar .brand {
+      font-size: 0.95rem;
+      letter-spacing: 0.03em;
+    }
+
+    /* LINKS */
     .sidebar .nav-link {
-      border-radius: .5rem;
-      padding: .55rem .75rem;
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 0.6rem;
+      padding: 0.55rem 0.9rem;
+      color: var(--bs-secondary-color);
+      transition: background-color .15s ease, color .15s ease;
     }
 
     .sidebar .nav-link i {
       width: 18px;
       text-align: center;
-      margin-right: 6px;
+      opacity: .85;
     }
 
+    .sidebar .nav-link:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+      color: var(--bs-body-color);
+    }
+
+    /* ACTIVE STATE */
+    .sidebar .nav-link.active {
+      background-color: rgba(13, 110, 253, 0.15);
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .sidebar .nav-link.active::before {
+      content: "";
+      position: absolute;
+      left: -12px;
+      top: 6px;
+      bottom: 6px;
+      width: 4px;
+      border-radius: 4px;
+      background: var(--bs-primary);
+    }
+
+    /* SUBMENU */
     .submenu {
-      margin-left: 1.75rem;
+      margin-left: 1.1rem;
       padding-left: .75rem;
       border-left: 1px solid var(--bs-border-color);
+    }
+
+    .submenu .nav-link {
+      font-size: .85rem;
+      padding: .45rem .75rem;
+      color: var(--bs-secondary-color);
+    }
+
+    .submenu .nav-link.active {
+      background-color: transparent;
+      color: var(--bs-primary);
+      font-weight: 600;
+    }
+
+    .submenu .nav-link.active::before {
+      display: none;
+    }
+
+    /* LOGOUT */
+    .sidebar .logout-btn {
+      opacity: .85;
+    }
+
+    .sidebar .logout-btn:hover {
+      opacity: 1;
     }
   </style>
 </head>
@@ -109,15 +173,6 @@ $isAlerts = str_starts_with($page, 'alerts');
           <i class="fa-solid fa-server"></i>
           Servers
         </a>
-
-        <?php if ($isServers): ?>
-          <div class="submenu mt-1">
-            <a class="nav-link small <?= $page === 'servers' ? 'active' : '' ?>" href="/?page=servers">
-              <i class="fa-solid fa-list"></i>
-              All Servers
-            </a>
-          </div>
-        <?php endif; ?>
 
         <a class="nav-link <?= $isAlerts ? 'active' : '' ?>" href="/?page=alerts-general">
           <i class="fa-solid fa-bell"></i>
