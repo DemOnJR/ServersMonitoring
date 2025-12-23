@@ -50,14 +50,14 @@ Server Monitor includes a built-in web installer that guides you through the set
 
 ### Step 1: Upload the files
 
-Upload all project files to your web server directory (for example `public_html`).
+Upload all project files (from php or nodejs, ecc. directory) to your web server directory (for example `public_html`).
 
 ### Step 2: Run the installer
 
 Open the installer in your browser:
 
 ```
-https://your-website-url/installer/install.php
+https://your-website-url/install
 ```
 
 The installer will:
@@ -69,7 +69,7 @@ The installer will:
 
 ### Step 3: Access the dashboard
 
-After installation completes, you will be redirected automatically to the main dashboard:
+After installation completes, you will be redirected automatically to the login page or you can go to:
 
 ```
 https://your-website-url/
