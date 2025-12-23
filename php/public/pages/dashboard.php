@@ -76,11 +76,16 @@ $windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasi
 
 <!-- INSTALL AGENT -->
 <div class="card">
-  <div class="card-header">
+  <div class="card-header d-flex justify-content-between align-items-center">
     <strong>
       <i class="fa-solid fa-terminal me-1"></i>
       Install monitoring agent
     </strong>
+
+    <a href="https://github.com/DemOnJR/ServersMonitoring/" target="_blank" class="btn btn-sm btn-outline-secondary">
+      <i class="fa-brands fa-github"></i>
+      GitHub
+    </a>
   </div>
 
   <div class="card-body">
@@ -121,6 +126,14 @@ $windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasi
 
     <div class="text-muted small mt-3">
       The agent runs every minute and starts automatically after reboot.
+    </div>
+
+    <div class="text-muted small mt-3">
+      <i class="fa-brands fa-github me-1"></i>
+      Source code, documentation & issues:
+      <a href="https://github.com/DemOnJR/ServersMonitoring/" target="_blank" class="text-decoration-none">
+        github.com/DemOnJR/ServersMonitoring
+      </a>
     </div>
 
   </div>

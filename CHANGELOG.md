@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [v1.0.4] - 2025-12-18 20:46
+
+### Added
+- Simple Login
+- Windows support
+- Discord alerts
+- New server page (graphs, ecc)
+- New servers page (delete option)
+---
+
 ## [v1.0.3] - 2025-12-18 20:46
 
 ### Added
