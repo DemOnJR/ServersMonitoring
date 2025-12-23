@@ -18,10 +18,13 @@ $total = count($servers);
 $online = count(array_filter($servers, fn($s) => $s['diff'] < OFFLINE_THRESHOLD));
 $offline = $total - $online;
 
-// ?? Install command
+// ?? Base URL
 $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $baseUrl = $scheme . '://' . $_SERVER['HTTP_HOST'];
-$cmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
+
+// ?? Install commands
+$linuxCmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
+$windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasicParsing | iex";
 ?>
 
 <!-- SUMMARY CARDS -->
@@ -73,25 +76,52 @@ $cmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
 
 <!-- INSTALL AGENT -->
 <div class="card">
-  <div class="card-header d-flex justify-content-between align-items-center">
+  <div class="card-header">
     <strong>
       <i class="fa-solid fa-terminal me-1"></i>
       Install monitoring agent
     </strong>
-
-    <button class="btn btn-sm btn-outline-light"
-      onclick="navigator.clipboard.writeText(document.getElementById('installCmd').innerText)">
-      <i class="fa-solid fa-copy"></i> Copy
-    </button>
   </div>
 
   <div class="card-body">
-    <pre id="installCmd" class="mb-0 p-3 rounded" style="background:#020617;color:#e5e7eb;overflow:auto">
-<?= htmlspecialchars($cmd) ?>
-    </pre>
 
-    <div class="text-muted small mt-2">
-      Run this command on the server you want to monitor.
+    <!-- LINUX -->
+    <div class="mb-3">
+      <div class="small text-muted mb-1">
+        Linux (run as root / sudo)
+      </div>
+
+      <div class="position-relative">
+        <button class="btn btn-sm btn-outline-light position-absolute end-0 top-0 m-2"
+          onclick="navigator.clipboard.writeText(document.getElementById('linuxCmd').innerText)">
+          <i class="fa-solid fa-copy"></i>
+        </button>
+
+        <pre id="linuxCmd" class="p-3 rounded mb-0"
+          style="background:#020617;color:#e5e7eb;overflow:auto"><?= htmlspecialchars($linuxCmd) ?></pre>
+      </div>
     </div>
+
+    <!-- WINDOWS -->
+    <div>
+      <div class="small text-muted mb-1">
+        Windows (PowerShell — run as Administrator)
+      </div>
+
+      <div class="position-relative">
+        <button class="btn btn-sm btn-outline-light position-absolute end-0 top-0 m-2"
+          onclick="navigator.clipboard.writeText(document.getElementById('windowsCmd').innerText)">
+          <i class="fa-solid fa-copy"></i>
+        </button>
+
+        <pre id="windowsCmd" class="p-3 rounded mb-0"
+          style="background:#020617;color:#e5e7eb;overflow:auto"><?= htmlspecialchars($windowsCmd) ?></pre>
+      </div>
+    </div>
+
+    <div class="text-muted small mt-3">
+      The agent runs every minute and starts automatically after reboot.
+    </div>
+
   </div>
 </div>
