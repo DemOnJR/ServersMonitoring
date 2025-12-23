@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Server;
 
 use PDO;
+use RuntimeException;
 
 class ServerRepository
 {
@@ -13,66 +14,84 @@ class ServerRepository
   }
 
   // ==================================================
-  // FETCH ALL SERVERS + LAST METRIC (SAFE SQLITE)
+  // FETCH ALL SERVERS + LAST METRIC (DASHBOARD)
   // ==================================================
   public function fetchAllWithLastMetric(): array
   {
     $sql = "
-            SELECT
-                s.id,
-                s.hostname,
-                s.display_name,
-                s.ip,
-                s.last_seen,
+      SELECT
+        s.id,
+        s.hostname,
+        s.display_name,
+        s.ip,
+        s.last_seen,
 
-                -- seconds since last_seen
-                (strftime('%s','now') - strftime('%s', s.last_seen)) AS diff,
+        -- seconds since last_seen (INTEGER timestamps)
+        (strftime('%s','now') - s.last_seen) AS diff,
 
-                -- last metric snapshot
-                m.cpu_load,
-                m.ram_used,
-                m.ram_total,
+        -- last metric snapshot
+        m.cpu_load,
+        m.ram_used,
+        m.swap_used,
+        m.disk_used,
 
-                -- first metric timestamp
-                (
-                    SELECT MIN(created_at)
-                    FROM metrics
-                    WHERE server_id = s.id
-                ) AS first_seen
+        -- static totals (non-duplicated)
+        r.ram_total,
+        r.swap_total,
+        r.disk_total
 
-            FROM servers s
+      FROM servers s
 
-            LEFT JOIN metrics m
-              ON m.server_id = s.id
-             AND m.created_at = (
-                SELECT MAX(created_at)
-                FROM metrics
-                WHERE server_id = s.id
-             )
+      LEFT JOIN metrics m
+        ON m.server_id = s.id
+       AND m.created_at = (
+          SELECT MAX(created_at)
+          FROM metrics
+          WHERE server_id = s.id
+       )
 
-            ORDER BY s.hostname
-        ";
+      LEFT JOIN server_resources r
+        ON r.server_id = s.id
 
-    return $this->db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+      ORDER BY
+        s.display_name IS NULL,
+        s.display_name,
+        s.hostname
+    ";
+
+    return $this->db
+      ->query($sql)
+      ->fetchAll(PDO::FETCH_ASSOC);
   }
 
   // ==================================================
-  // FIND SERVER BY ID
+  // FIND SERVER BY ID (DETAIL PAGE)
   // ==================================================
   public function findById(int $id): array
   {
     $stmt = $this->db->prepare("
-            SELECT *
-            FROM servers
-            WHERE id = ?
-            LIMIT 1
-        ");
-    $stmt->execute([$id]);
+      SELECT
+        s.*,
+        sys.os,
+        sys.kernel,
+        sys.arch,
+        sys.cpu_model,
+        sys.cpu_cores,
+        r.ram_total,
+        r.swap_total,
+        r.disk_total
+      FROM servers s
+      LEFT JOIN server_system sys ON sys.server_id = s.id
+      LEFT JOIN server_resources r ON r.server_id = s.id
+      WHERE s.id = ?
+      LIMIT 1
+    ");
 
+    $stmt->execute([$id]);
     $server = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$server) {
-      throw new \RuntimeException('Server not found');
+      throw new RuntimeException('Server not found');
     }
 
     return $server;
@@ -84,80 +103,71 @@ class ServerRepository
   public function updateDisplayName(int $id, string $name): void
   {
     $stmt = $this->db->prepare("
-            UPDATE servers
-            SET display_name = ?
-            WHERE id = ?
-        ");
+      UPDATE servers
+      SET display_name = ?
+      WHERE id = ?
+    ");
+
     $stmt->execute([$name, $id]);
   }
 
   // ==================================================
-  // INSERT OR UPDATE SERVER (IP = IDENTITY)
+  // DELETE SERVER (CASCADE SAFE)
   // ==================================================
-  public function upsert(
-    string $hostname,
-    string $ip,
-    ?string $os,
-    ?string $kernel,
-    ?string $arch
-  ): int {
-    // Check if server already exists by IP
+  public function delete(int $id): void
+  {
     $stmt = $this->db->prepare("
-            SELECT id
-            FROM servers
-            WHERE ip = ?
-            LIMIT 1
-        ");
+      DELETE FROM servers
+      WHERE id = ?
+    ");
+
+    $stmt->execute([$id]);
+  }
+
+  // ==================================================
+  // UPSERT SERVER (IP = IDENTITY)
+  // ==================================================
+  public function upsert(string $hostname, string $ip): int
+  {
+    // Find by IP (identity)
+    $stmt = $this->db->prepare("
+      SELECT id
+      FROM servers
+      WHERE ip = ?
+      LIMIT 1
+    ");
     $stmt->execute([$ip]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($row) {
-      // UPDATE
       $serverId = (int) $row['id'];
 
+      // Update mutable fields only
       $update = $this->db->prepare("
-                UPDATE servers
-                SET
-                    hostname  = ?,
-                    os        = COALESCE(?, os),
-                    kernel    = COALESCE(?, kernel),
-                    arch      = COALESCE(?, arch),
-                    last_seen = datetime('now')
-                WHERE id = ?
-            ");
-
-      $update->execute([
-        $hostname,
-        $os,
-        $kernel,
-        $arch,
-        $serverId
-      ]);
+        UPDATE servers
+        SET
+          hostname = ?,
+          last_seen = strftime('%s','now')
+        WHERE id = ?
+      ");
+      $update->execute([$hostname, $serverId]);
 
       return $serverId;
     }
 
-    // INSERT
+    // Insert new server
     $insert = $this->db->prepare("
-            INSERT INTO servers (
-                hostname,
-                ip,
-                os,
-                kernel,
-                arch,
-                last_seen
-            ) VALUES (
-                ?, ?, ?, ?, ?, datetime('now')
-            )
-        ");
+      INSERT INTO servers (
+        hostname,
+        ip,
+        first_seen,
+        last_seen
+      ) VALUES (
+        ?, ?, strftime('%s','now'), strftime('%s','now')
+      )
+    ");
 
-    $insert->execute([
-      $hostname,
-      $ip,
-      $os,
-      $kernel,
-      $arch
-    ]);
+    $insert->execute([$hostname, $ip]);
 
     return (int) $this->db->lastInsertId();
   }

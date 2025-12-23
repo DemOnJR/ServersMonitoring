@@ -156,6 +156,15 @@ $isAlerts = str_starts_with($page, 'alerts');
 
   </div>
 
+  <script>
+    document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+      new bootstrap.Tooltip(el, {
+        container: 'body',
+        delay: { show: 200, hide: 50 }
+      });
+    });
+  </script>
+
 </body>
 
 </html>

@@ -15,53 +15,72 @@ class MetricsRepository
   /**
    * Insert a metrics snapshot
    * Used by api/report.php
+   *
+   * IMPORTANT:
+   * - This table stores ONLY dynamic values
+   * - Totals live in server_resources
    */
   public function insert(array $data): void
   {
+    // defaults for optional metrics
     $data = array_merge([
       'processes' => 0,
       'zombies' => 0,
       'failed_services' => 0,
       'open_ports' => 0,
+      'swap_used' => 0,
+      'rx_bytes' => 0,
+      'tx_bytes' => 0,
+      'uptime' => null,
     ], $data);
 
     $stmt = $this->db->prepare("
-        INSERT INTO metrics (
-            server_id,
-            cpu_load,
-            ram_used,
-            ram_total,
-            disk_used,
-            disk_total,
-            rx_bytes,
-            tx_bytes,
-            processes,
-            zombies,
-            failed_services,
-            open_ports,
-            uptime,
-            created_at
-        ) VALUES (
-            :server_id,
-            :cpu_load,
-            :ram_used,
-            :ram_total,
-            :disk_used,
-            :disk_total,
-            :rx_bytes,
-            :tx_bytes,
-            :processes,
-            :zombies,
-            :failed_services,
-            :open_ports,
-            :uptime,
-            datetime('now')
-        )
-    ");
+            INSERT INTO metrics (
+                server_id,
+                cpu_load,
+                ram_used,
+                swap_used,
+                disk_used,
+                rx_bytes,
+                tx_bytes,
+                processes,
+                zombies,
+                failed_services,
+                open_ports,
+                uptime,
+                created_at
+            ) VALUES (
+                :server_id,
+                :cpu_load,
+                :ram_used,
+                :swap_used,
+                :disk_used,
+                :rx_bytes,
+                :tx_bytes,
+                :processes,
+                :zombies,
+                :failed_services,
+                :open_ports,
+                :uptime,
+                strftime('%s','now')
+            )
+        ");
 
-    $stmt->execute($data);
+    $stmt->execute([
+      ':server_id' => $data['server_id'],
+      ':cpu_load' => $data['cpu_load'],
+      ':ram_used' => $data['ram_used'],
+      ':swap_used' => $data['swap_used'],
+      ':disk_used' => $data['disk_used'],
+      ':rx_bytes' => $data['rx_bytes'],
+      ':tx_bytes' => $data['tx_bytes'],
+      ':processes' => $data['processes'],
+      ':zombies' => $data['zombies'],
+      ':failed_services' => $data['failed_services'],
+      ':open_ports' => $data['open_ports'],
+      ':uptime' => $data['uptime'],
+    ]);
   }
-
 
   /**
    * Fetch today's metrics (00:00 ? now)
@@ -69,7 +88,7 @@ class MetricsRepository
    */
   public function today(int $serverId): array
   {
-    $start = date('Y-m-d 00:00:00');
+    $start = strtotime(date('Y-m-d 00:00:00'));
 
     $stmt = $this->db->prepare("
             SELECT *
@@ -105,8 +124,8 @@ class MetricsRepository
    */
   public function range(
     int $serverId,
-    string $from,
-    string $to
+    int $from,
+    int $to
   ): array {
     $stmt = $this->db->prepare("
             SELECT *

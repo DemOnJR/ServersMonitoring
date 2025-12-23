@@ -15,19 +15,23 @@ Guard::protect();
 
 header('Content-Type: application/json; charset=utf-8');
 
+/* =========================================================
+   JSON RESPONSE HELPER
+========================================================= */
 function json_exit(array $data, int $code = 200): never
 {
   if (ob_get_length()) {
     ob_clean();
   }
+
   http_response_code($code);
   echo json_encode($data, JSON_UNESCAPED_SLASHES);
   exit;
 }
 
-/* ----------------------------
+/* =========================================================
    INPUT
----------------------------- */
+========================================================= */
 $webhook = trim((string) ($_POST['webhook'] ?? ''));
 $mentionsRaw = trim((string) ($_POST['mentions'] ?? ''));
 
@@ -35,20 +39,16 @@ if ($webhook === '') {
   json_exit(['ok' => false, 'error' => 'Webhook is missing'], 400);
 }
 
-/* ----------------------------
-   NORMALIZE MENTIONS
----------------------------- */
+/* =========================================================
+   NORMALIZE MENTIONS (SAME AS PROD)
+========================================================= */
 $mentions = null;
 
-// default to @here if nothing provided
-if ($mentionsRaw === '') {
-  $mentions = '@here';
-} else {
-  // allow @here / @everyone directly
+if ($mentionsRaw !== '') {
+
   if ($mentionsRaw === '@here' || $mentionsRaw === '@everyone') {
     $mentions = $mentionsRaw;
   } else {
-    // split IDs by space or comma
     $ids = preg_split('/[\s,]+/', $mentionsRaw);
 
     $formatted = [];
@@ -60,58 +60,62 @@ if ($mentionsRaw === '') {
 
     if ($formatted) {
       $mentions = implode(' ', $formatted);
-    } else {
-      // fallback if user pasted garbage
-      $mentions = '@here';
     }
   }
 }
 
-/* ----------------------------
-   TEST EMBED
----------------------------- */
+/* =========================================================
+   TEST EMBED (REAL STRUCTURE)
+========================================================= */
 $embed = [
-  'title' => '🧪 Test Alert',
-  'description' => 'This is a test message from **Server Monitor**.',
+  'title' => '🧪 Alert Test',
+  'description' => 'This is a **test alert** from Server Monitor.',
   'color' => 3066993, // green
   'fields' => [
-    ['name' => 'Status', 'value' => 'Webhook OK', 'inline' => true],
-    ['name' => 'Mentions', 'value' => $mentions, 'inline' => true],
+    ['name' => 'Server', 'value' => 'TEST-SERVER', 'inline' => true],
+    ['name' => 'Metric', 'value' => 'CPU', 'inline' => true],
+    ['name' => 'Value', 'value' => '42%', 'inline' => true],
+    ['name' => 'Threshold', 'value' => '> 80%', 'inline' => true],
+    ['name' => 'Mentions', 'value' => $mentions ?: 'None', 'inline' => false],
   ],
   'footer' => ['text' => 'Server Monitor'],
   'timestamp' => date('c'),
 ];
 
+/* =========================================================
+   SEND
+========================================================= */
 try {
   (new DiscordChannel())->send(
-    $webhook,
-    $mentions,
-    $embed
+    webhook: $webhook,
+    mentions: $mentions,
+    embed: $embed
   );
 
   json_exit([
     'ok' => true,
-    'message' => 'Discord test message sent successfully',
+    'message' => 'Discord test alert sent successfully',
   ]);
-} catch (RuntimeException $e) {
 
-  // friendly Discord-specific errors
-  if (str_contains($e->getMessage(), '401')) {
+} catch (\Alert\Channel\DiscordException $e) {
+
+  // Known Discord errors
+  if ($e->getCode() === 401) {
     json_exit([
       'ok' => false,
-      'error' => 'Invalid Discord webhook (401). Please check the URL.',
+      'error' => 'Invalid Discord webhook (401)',
     ], 400);
   }
 
-  if (str_contains($e->getMessage(), '403')) {
+  if ($e->getCode() === 403) {
     json_exit([
       'ok' => false,
-      'error' => 'Webhook forbidden (403). It may have been deleted.',
+      'error' => 'Webhook forbidden (403)',
     ], 400);
   }
 
   json_exit([
     'ok' => false,
-    'error' => $e->getMessage(),
+    'error' => 'Discord error: ' . $e->getMessage(),
   ], 500);
 }

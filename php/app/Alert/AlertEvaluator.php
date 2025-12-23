@@ -3,25 +3,24 @@ declare(strict_types=1);
 
 namespace Alert;
 
-use Alert\Channel\DiscordChannel;
-
 final class AlertEvaluator
 {
   public function __construct(
-    private AlertRuleRepository $rules,
-    private AlertChannelRepository $channels,
-    private AlertStateRepository $state
+    private AlertRuleRepository $ruleRepo,
+    private AlertStateRepository $stateRepo,
+    private AlertDispatcher $dispatcher
   ) {
   }
 
   public function evaluate(
     int $serverId,
     string $hostname,
+    string $ip,
     array $metrics
   ): void {
-    $rules = $this->rules->getActiveRulesForServer($serverId);
 
-    foreach ($rules as $rule) {
+    foreach ($this->ruleRepo->getActiveRulesForServer($serverId) as $rule) {
+
       $metric = $rule['metric'];
 
       if (!isset($metrics[$metric])) {
@@ -30,12 +29,18 @@ final class AlertEvaluator
 
       $value = (float) $metrics[$metric];
 
-      if (!$this->compare($value, $rule['operator'], (float) $rule['threshold'])) {
+      if (
+        !$this->compare(
+          $value,
+          $rule['operator'],
+          (float) $rule['threshold']
+        )
+      ) {
         continue;
       }
 
       if (
-        !$this->state->canSend(
+        !$this->stateRepo->canSend(
           (int) $rule['id'],
           $serverId,
           (int) $rule['cooldown_seconds']
@@ -44,45 +49,16 @@ final class AlertEvaluator
         continue;
       }
 
-      $channels = $this->channels->getChannelsForRule((int) $rule['id']);
+      // ?? Delegate everything else
+      $this->dispatcher->dispatch(
+        rule: $rule,
+        serverId: $serverId,
+        hostname: $hostname,
+        ip: $ip,
+        value: $value
+      );
 
-      foreach ($channels as $channel) {
-        if ($channel['type'] !== 'discord') {
-          continue;
-        }
-
-        $cfg = json_decode($channel['config_json'], true);
-        if (!isset($cfg['webhook'])) {
-          continue;
-        }
-
-        $discord = new DiscordChannel();
-
-        $discord->send(
-          $cfg['webhook'],
-          $rule['title'] ?: 'Alert triggered',
-          $rule['description'] ?: 'Threshold exceeded',
-          [
-            'hostname' => $hostname,
-            'ip' => $this->rules->getServerIp($serverId),
-            'metric' => $metric,
-            'value' => round($value, 2) . '%',
-            'threshold' => "{$rule['operator']} {$rule['threshold']}%",
-            'mentions' => $rule['mentions'] ?? null,
-            'color' => match ($metric) {
-              'cpu' => 15105570,
-              'ram' => 15158332,
-              'disk' => 3447003,
-              'network' => 10181046,
-              default => 9807270,
-            },
-            'title' => $rule['title'],
-            'description' => $rule['description'],
-          ]
-        );
-      }
-
-      $this->state->markSent(
+      $this->stateRepo->markSent(
         (int) $rule['id'],
         $serverId,
         $value

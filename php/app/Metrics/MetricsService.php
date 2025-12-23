@@ -19,14 +19,6 @@ class MetricsService
   }
 
   // ==================================================
-  // METRICS SINCE A TIMESTAMP
-  // ==================================================
-  public function since(int $serverId, string $since): array
-  {
-    return $this->repo->fetchByServerSince($serverId, $since);
-  }
-
-  // ==================================================
   // LATEST SNAPSHOT
   // ==================================================
   public function latest(int $serverId): ?array
@@ -37,30 +29,32 @@ class MetricsService
   // ==================================================
   // METRICS IN RANGE
   // ==================================================
-  public function range(
-    int $serverId,
-    string $from,
-    string $to
-  ): array {
+  public function range(int $serverId, int $from, int $to): array
+  {
     return $this->repo->range($serverId, $from, $to);
   }
 
   // ==================================================
-  // CPU & RAM PERCENT SERIES (CHART-READY)
+  // CPU & RAM SERIES (CHART READY)
+  // Requires server_resources totals
   // ==================================================
-  public function cpuRamSeries(array $metrics): array
+  public function cpuRamSeries(array $metrics, array $resources): array
   {
     $labels = [];
     $cpu = [];
     $ram = [];
 
-    foreach ($metrics as $row) {
-      $labels[] = date('H:i', strtotime($row['created_at']));
+    $ramTotal = (int) ($resources['ram_total'] ?? 0);
 
+    foreach ($metrics as $row) {
+      $labels[] = date('H:i', (int) $row['created_at']);
+
+      // CPU %
       $cpu[] = min(max($row['cpu_load'] * 100, 0), 100);
 
-      $ram[] = $row['ram_total'] > 0
-        ? min(max(($row['ram_used'] / $row['ram_total']) * 100, 0), 100)
+      // RAM %
+      $ram[] = $ramTotal > 0
+        ? min(max(($row['ram_used'] / $ramTotal) * 100, 0), 100)
         : 0;
     }
 
@@ -72,7 +66,7 @@ class MetricsService
   }
 
   // ==================================================
-  // NETWORK SERIES (MB / MIN)
+  // NETWORK SERIES (MB / INTERVAL)
   // ==================================================
   public function networkSeries(array $metrics): array
   {
@@ -84,7 +78,7 @@ class MetricsService
     $prevTx = null;
 
     foreach ($metrics as $row) {
-      $labels[] = date('H:i', strtotime($row['created_at']));
+      $labels[] = date('H:i', (int) $row['created_at']);
 
       if ($prevRx === null) {
         $rx[] = 0;
@@ -115,7 +109,7 @@ class MetricsService
     $nowH = (int) date('H');
     $nowM = (int) date('i');
 
-    // Init grid
+    // init grid
     for ($h = 0; $h < 24; $h++) {
       for ($m = 0; $m < 60; $m++) {
         $grid[$h][$m] =
@@ -125,9 +119,9 @@ class MetricsService
       }
     }
 
-    // Mark online minutes
+    // mark online minutes
     foreach ($metrics as $row) {
-      $ts = strtotime($row['created_at']);
+      $ts = (int) $row['created_at'];
       $h = (int) date('H', $ts);
       $m = (int) date('i', $ts);
       $grid[$h][$m] = 'online';
@@ -137,7 +131,7 @@ class MetricsService
   }
 
   // ==================================================
-  // UPTIME PERCENTAGE (FOR ALERTS / UI)
+  // UPTIME PERCENT (TODAY)
   // ==================================================
   public function uptimePercent(array $metrics): float
   {
@@ -148,7 +142,7 @@ class MetricsService
     $minutes = [];
 
     foreach ($metrics as $row) {
-      $minutes[date('Y-m-d H:i', strtotime($row['created_at']))] = true;
+      $minutes[date('Y-m-d H:i', (int) $row['created_at'])] = true;
     }
 
     $online = count($minutes);

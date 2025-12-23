@@ -4,199 +4,204 @@ use Server\ServerRepository;
 
 $repo = new ServerRepository($db);
 $servers = $repo->fetchAllWithLastMetric();
+
+/* -----------------------------
+   HELPERS (LOCAL ONLY)
+----------------------------- */
+function humanDiff(int $seconds): string
+{
+  if ($seconds < 60) {
+    return $seconds . 's';
+  }
+  if ($seconds < 3600) {
+    return floor($seconds / 60) . 'm';
+  }
+  if ($seconds < 86400) {
+    return floor($seconds / 3600) . 'h';
+  }
+  return floor($seconds / 86400) . 'd';
+}
+
+function barColor(int $val): string
+{
+  if ($val >= 90)
+    return 'bg-danger';
+  if ($val >= 75)
+    return 'bg-warning';
+  return 'bg-success';
+}
 ?>
 
-<table id="serversTable" class="table table-hover table-sm align-middle w-100">
-  <thead>
-    <tr>
-      <th>Server</th>
-      <th>IP</th>
-      <th class="text-center">Usage</th>
-      <th>Status</th>
-      <th>Last Seen</th>
-      <th class="text-end">Actions</th>
-    </tr>
-  </thead>
-  <tbody>
+<div class="card shadow-sm">
+  <div class="card-body p-2">
 
-    <?php foreach ($servers as $s):
-      $isOnline = $s['diff'] < OFFLINE_THRESHOLD;
-      $cpu = $isOnline ? min($s['cpu_load'] * 100, 100) : 0;
-      $ram = ($isOnline && $s['ram_total'] > 0)
-        ? round(($s['ram_used'] / $s['ram_total']) * 100)
-        : 0;
-      ?>
-      <tr>
+    <table id="serversTable" class="table table-hover table-sm align-middle mb-0 w-100">
+      <thead>
+        <tr>
+          <th>Server</th>
+          <th style="width:120px">CPU</th>
+          <th style="width:120px">RAM</th>
+          <th style="width:120px">Disk</th>
+          <th class="text-muted">Last seen</th>
+          <th class="text-end" style="width:40px"></th>
+        </tr>
+      </thead>
 
-        <!-- SERVER -->
-        <td>
-          <span class="server-name-text fw-semibold" role="button">
-            <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
-          </span>
+      <tbody>
+        <?php foreach ($servers as $s):
 
-          <input type="text" class="form-control form-control-sm server-name-input d-none mt-1"
-            data-id="<?= (int) $s['id'] ?>" value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
+          $isOnline = ((int) $s['diff']) < OFFLINE_THRESHOLD;
 
-          <small class="text-muted d-block mt-1">
-            <a href="/?page=server&id=<?= (int) $s['id'] ?>" class="text-decoration-none text-success">
-              <?= Mask::hostname($s['hostname']) ?>
-            </a>
-          </small>
-        </td>
+          // CPU %
+          $cpu = $isOnline && $s['cpu_load'] !== null
+            ? min((int) ($s['cpu_load'] * 100), 100)
+            : 0;
 
-        <!-- IP -->
-        <td><?= Mask::ip($s['ip']) ?></td>
+          // RAM %
+          $ram = ($isOnline && !empty($s['ram_total']))
+            ? (int) (($s['ram_used'] / $s['ram_total']) * 100)
+            : 0;
 
-        <!-- USAGE -->
-        <td class="text-center">
-          <div class="d-flex justify-content-center gap-2">
-            <canvas id="cpu-<?= $s['id'] ?>" width="64" height="44"></canvas>
-            <canvas id="ram-<?= $s['id'] ?>" width="64" height="44"></canvas>
-          </div>
-        </td>
+          // DISK %
+          $disk = ($isOnline && !empty($s['disk_total']))
+            ? (int) (($s['disk_used'] / $s['disk_total']) * 100)
+            : 0;
+          ?>
 
-        <!-- STATUS -->
-        <td>
-          <?= $isOnline
-            ? '<span class="badge bg-success">ONLINE</span>'
-            : '<span class="badge bg-danger">OFFLINE</span>' ?>
-        </td>
+          <tr data-id="<?= (int) $s['id'] ?>">
 
-        <!-- LAST SEEN -->
-        <td><?= htmlspecialchars($s['last_seen']) ?></td>
+            <!-- SERVER -->
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <span class="status-dot <?= $isOnline ? 'bg-success' : 'bg-danger' ?>"></span>
 
-        <!-- ACTIONS -->
-        <td class="text-end">
-          <button class="btn btn-sm btn-outline-danger server-delete-btn" data-id="<?= (int) $s['id'] ?>">
-            <i class="fa-solid fa-trash"></i>
-          </button>
-        </td>
+                <span class="server-name-text fw-semibold" role="button">
+                  <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
+                </span>
+              </div>
 
-      </tr>
+              <input type="text" class="form-control form-control-sm server-name-input d-none mt-1"
+                data-id="<?= (int) $s['id'] ?>" value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
 
-      <script>
-        window._gauges = window._gauges || [];
-        window._gauges.push({
-          id: <?= (int) $s['id'] ?>,
-          cpu: <?= $cpu ?>,
-          ram: <?= $ram ?>
-        });
-      </script>
+              <small class="text-muted">
+                <a href="/?page=server&id=<?= (int) $s['id'] ?>" class="text-decoration-none text-muted">
+                  <?= Mask::ip($s['ip']) ?>
+                </a>
+              </small>
+            </td>
 
-    <?php endforeach; ?>
+            <!-- CPU -->
+            <td>
+              <div class="small fw-semibold"><?= $cpu ?>%</div>
+              <div class="progress progress-xs">
+                <div class="progress-bar <?= barColor($cpu) ?>" style="width:<?= $cpu ?>%"></div>
+              </div>
+            </td>
 
-  </tbody>
-</table>
+            <!-- RAM -->
+            <td>
+              <div class="small fw-semibold"><?= $ram ?>%</div>
+              <div class="progress progress-xs">
+                <div class="progress-bar <?= barColor($ram) ?>" style="width:<?= $ram ?>%"></div>
+              </div>
+            </td>
+
+            <!-- DISK -->
+            <td>
+              <div class="small fw-semibold"><?= $disk ?>%</div>
+              <div class="progress progress-xs">
+                <div class="progress-bar <?= barColor($disk) ?>" style="width:<?= $disk ?>%"></div>
+              </div>
+            </td>
+
+            <!-- LAST SEEN -->
+            <td class="text-muted small">
+              <?= humanDiff((int) $s['diff']) ?> ago
+            </td>
+
+            <!-- ACTIONS -->
+            <td class="text-end">
+              <div class="dropdown">
+                <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false">
+                  <i class="fa-solid fa-ellipsis-vertical"></i>
+                </button>
+
+                <ul class="dropdown-menu dropdown-menu-end">
+                  <li>
+                    <a class="dropdown-item" href="/?page=server&id=<?= (int) $s['id'] ?>">
+                      View
+                    </a>
+                  </li>
+                  <li>
+                    <button class="dropdown-item text-danger server-delete-btn" data-id="<?= (int) $s['id'] ?>">
+                      Delete
+                    </button>
+                  </li>
+                </ul>
+              </div>
+            </td>
+
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+
+  </div>
+</div>
 
 <!-- DELETE MODAL -->
 <div class="modal fade" id="deleteServerModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
     <div class="modal-content">
-
       <div class="modal-header">
-        <h5 class="modal-title text-danger">
-          <i class="fa-solid fa-triangle-exclamation me-1"></i>
-          Delete Server
-        </h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <h6 class="modal-title text-danger">Delete server</h6>
+        <button class="btn-close" data-bs-dismiss="modal"></button>
       </div>
 
-      <div class="modal-body">
-        <p class="mb-1">This will permanently delete the server and all metrics.</p>
-        <p class="text-muted small mb-0">This action cannot be undone.</p>
+      <div class="modal-body small">
+        This will permanently delete the server and all metrics.
       </div>
 
-      <div class="modal-footer">
-        <button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button class="btn btn-danger" id="confirmDeleteServer">Delete</button>
+      <div class="modal-footer py-2">
+        <button class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-sm btn-danger" id="confirmDeleteServer">Delete</button>
       </div>
-
     </div>
   </div>
 </div>
 
+<style>
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .progress-xs {
+    height: 4px;
+  }
+</style>
+
 <script>
-  /* ===============================
-     GLOBALS
-  ================================ */
-  window._charts = {};
-  let deleteBtn = null;
-
-  /* ===============================
+  /* =============================
      DATATABLE
-  ================================ */
+  ============================= */
   $(function () {
-    const table = $('#serversTable').DataTable({
+    $('#serversTable').DataTable({
       pageLength: 25,
-      order: [[4, 'desc']],
       stateSave: true,
-      autoWidth: false,
+      order: [[4, 'asc']],
       columnDefs: [
-        { orderable: false, targets: [2, 5] }
-      ],
-      language: {
-        search: "_INPUT_",
-        searchPlaceholder: "Search servers..."
-      }
+        { orderable: false, targets: [5] }
+      ]
     });
-
-    /* ===============================
-       CHART.JS
-    ================================ */
-    const centerText = {
-      id: 'centerText',
-      afterDraw(chart) {
-        const v = chart.data.datasets[0].data[0];
-        const p = chart.getDatasetMeta(0).data[0];
-        chart.ctx.font = 'bold 10px Arial';
-        chart.ctx.fillText(v + '%', p.x, p.y - 2);
-      }
-    };
-
-    function gauge(id, val, color) {
-      const el = document.getElementById(id);
-      if (!el) return;
-
-      if (window._charts[id]) {
-        window._charts[id].destroy();
-        delete window._charts[id];
-      }
-
-      window._charts[id] = new Chart(el, {
-        type: 'doughnut',
-        data: {
-          datasets: [{
-            data: [val, 100 - val],
-            backgroundColor: [color, '#2a2a2a'],
-            borderWidth: 0
-          }]
-        },
-        options: {
-          responsive: false,
-          rotation: -90,
-          circumference: 180,
-          cutout: '70%',
-          plugins: { legend: false, tooltip: false }
-        },
-        plugins: [centerText]
-      });
-    }
-
-    function renderGauges() {
-      (window._gauges || []).forEach(g => {
-        gauge('cpu-' + g.id, g.cpu, '#0d6efd');
-        gauge('ram-' + g.id, g.ram, '#198754');
-      });
-    }
-
-    renderGauges();
-    table.on('draw', renderGauges);
   });
 
-  /* ===============================
+  /* =============================
      INLINE RENAME
-  ================================ */
-  document.addEventListener('click', (e) => {
+  ============================= */
+  document.addEventListener('click', e => {
     const text = e.target.closest('.server-name-text');
     if (!text) return;
 
@@ -206,12 +211,13 @@ $servers = $repo->fetchAllWithLastMetric();
     text.classList.add('d-none');
     input.classList.remove('d-none');
     input.focus();
-    input.select();
   });
 
-  function saveName(input) {
-    const id = input.dataset.id;
-    const name = input.value.trim();
+  document.addEventListener('blur', e => {
+    if (!e.target.classList.contains('server-name-input')) return;
+
+    const id = e.target.dataset.id;
+    const name = e.target.value.trim();
     if (!name) return;
 
     fetch('/ajax/server.php?action=saveName', {
@@ -220,66 +226,30 @@ $servers = $repo->fetchAllWithLastMetric();
       body: new URLSearchParams({ id, name })
     });
 
-    const text = input.closest('td').querySelector('.server-name-text');
-    text.textContent = name;
-    input.classList.add('d-none');
-    text.classList.remove('d-none');
-  }
-
-  document.addEventListener('blur', e => {
-    if (e.target.classList.contains('server-name-input')) {
-      saveName(e.target);
-    }
+    const td = e.target.closest('td');
+    td.querySelector('.server-name-text').textContent = name;
+    e.target.classList.add('d-none');
+    td.querySelector('.server-name-text').classList.remove('d-none');
   }, true);
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.classList.contains('server-name-input')) {
-      e.preventDefault();
-      e.target.blur();
-    }
-    if (e.key === 'Escape' && e.target.classList.contains('server-name-input')) {
-      const td = e.target.closest('td');
-      e.target.value = td.querySelector('.server-name-text').textContent.trim();
-      e.target.classList.add('d-none');
-      td.querySelector('.server-name-text').classList.remove('d-none');
-    }
-  });
+  /* =============================
+     DELETE
+  ============================= */
+  let deleteId = null;
 
-  /* ===============================
-     DELETE (MODAL)
-  ================================ */
   document.addEventListener('click', e => {
     const btn = e.target.closest('.server-delete-btn');
     if (!btn) return;
-    deleteBtn = btn;
+
+    deleteId = btn.dataset.id;
     new bootstrap.Modal('#deleteServerModal').show();
   });
 
   document.getElementById('confirmDeleteServer').addEventListener('click', () => {
-    if (!deleteBtn) return;
-
-    const id = deleteBtn.dataset.id;
-    const row = deleteBtn.closest('tr');
-    const table = $('#serversTable').DataTable();
-
     fetch('/ajax/server.php?action=delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ id })
-    })
-      .then(r => r.json())
-      .then(() => {
-        row.querySelectorAll('canvas').forEach(c => {
-          if (window._charts[c.id]) {
-            window._charts[c.id].destroy();
-            delete window._charts[c.id];
-          }
-        });
-
-        table.row(row).remove().draw(false);
-        bootstrap.Modal.getInstance(
-          document.getElementById('deleteServerModal')
-        ).hide();
-      });
+      body: new URLSearchParams({ id: deleteId })
+    }).then(() => location.reload());
   });
 </script>
