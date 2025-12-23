@@ -123,12 +123,14 @@ Your setup consists of the following components:
 ## Latest Release
 
 <!-- CHANGELOG:START -->
-## [v1.0.3] - 2025-12-18 20:46
+## [v1.0.4] - 2025-12-18 20:46
 
 ### Added
-- Automatic URL for installation
-- 1 Layer for Security db dir
-
+- Simple Login
+- Windows support
+- Discord alerts
+- New server page (graphs, ecc)
+- New servers page (delete option)
 ---
 
 <!-- CHANGELOG:END -->
