@@ -49,6 +49,26 @@ $resources = $db->query("
 ];
 
 /* --------------------------------------------------
+   LOGS
+-------------------------------------------------- */
+$logs = $db->query("
+  SELECT
+    created_at,
+    cpu_load,
+    ram_used,
+    disk_used,
+    rx_bytes,
+    tx_bytes,
+    processes,
+    zombies
+  FROM metrics
+  WHERE server_id = {$serverId}
+  ORDER BY created_at DESC
+  LIMIT 1440
+")->fetchAll(PDO::FETCH_ASSOC);
+
+
+/* --------------------------------------------------
    LOAD METRICS
 -------------------------------------------------- */
 $metricsRepo = new MetricsRepository($db);
@@ -536,3 +556,101 @@ function pctVal(float $v): int
     }
   });
 </script>
+
+<!-- LOGS -->
+<!-- <div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Metrics Logs (last 24h)</strong>
+    <span class="text-muted small">
+      Showing last <?= count($logs) ?> records
+    </span>
+  </div>
+
+  <div class="card-body">
+    <div class="table-responsive">
+      <table id="logsTable" class="table table-sm table-hover align-middle w-100">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>CPU %</th>
+            <th>RAM</th>
+            <th>Disk</th>
+            <th>Download</th>
+            <th>Upload</th>
+            <th>Proc</th>
+            <th>Z</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <?php
+          $prev = null;
+          foreach ($logs as $row): ?>
+
+            <?php
+            // DOWNLOAD / UPLOAD per minute
+            $download = 0;
+            $upload = 0;
+
+            if ($prev) {
+              $dt = max(60, $prev['created_at'] - $row['created_at']); // sec
+          
+              $download = max(0, ($prev['rx_bytes'] - $row['rx_bytes'])) / $dt * 60;
+              $upload = max(0, ($prev['tx_bytes'] - $row['tx_bytes'])) / $dt * 60;
+            }
+            ?>
+
+            <tr>
+              <td class="text-muted small">
+                <?= date('Y-m-d H:i', (int) $row['created_at']) ?>
+              </td>
+
+              <td><?= pct($row['cpu_load'] * 100) ?></td>
+
+              <td><?= Formatter::bytesMB((int) $row['ram_used']) ?></td>
+
+              <td><?= Formatter::diskKB((int) $row['disk_used']) ?></td>
+
+              <td>
+                ↓ <?= Formatter::bytes($download) ?>/min
+              </td>
+
+              <td>
+                ↑ <?= Formatter::bytes($upload) ?>/min
+              </td>
+
+              <td><?= (int) $row['processes'] ?></td>
+
+              <td>
+                <?php if ((int) $row['zombies'] > 0): ?>
+                  <span class="badge bg-danger"><?= (int) $row['zombies'] ?></span>
+                <?php else: ?>
+                  <span class="text-muted">0</span>
+                <?php endif; ?>
+              </td>
+            </tr>
+
+            <?php $prev = $row; ?>
+
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div> -->
+
+<!-- <script>
+  $(function () {
+    $('#logsTable').DataTable({
+      pageLength: 25,
+      lengthMenu: [25, 50, 100, 250],
+      order: [[0, 'desc']],
+      stateSave: true,
+      deferRender: true,
+      columnDefs: [
+        { targets: 0, width: 140 },
+        { targets: [1, 6, 7], className: 'text-center' }
+      ]
+    });
+  });
+</script> -->

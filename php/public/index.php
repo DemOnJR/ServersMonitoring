@@ -7,7 +7,7 @@ use Auth\Guard;
 Guard::protect();
 
 /**
- * ROUTES (SAFE WHITELIST)
+ * ROUTES
  */
 $routes = [
   'dashboard' => 'dashboard.php',

@@ -28,23 +28,18 @@ final class Formatter
     /**
      * Format bytes ? MB / GB / TB
      */
-    public static function bytes(int $bytes): string
+    public static function bytes(float $bytes): string
     {
         if ($bytes <= 0) {
-            return '0 MB';
+            return '0 B';
         }
 
-        $gb = $bytes / 1024 / 1024 / 1024;
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = (int) floor(log($bytes, 1024));
 
-        if ($gb >= 1024) {
-            return round($gb / 1024, 2) . ' TB';
-        }
-        if ($gb >= 1) {
-            return round($gb, 2) . ' GB';
-        }
-
-        return round($bytes / 1024 / 1024, 2) . ' MB';
+        return round($bytes / (1024 ** $i), 2) . ' ' . $units[$i];
     }
+
 
     /**
      * Format memory stored in MB
