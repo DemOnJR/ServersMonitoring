@@ -28,7 +28,7 @@ try {
       exit;
     }
 
-    // if row doesn't exist, create it with a generated slug
+    // ensure server exists
     $st = $db->prepare("SELECT id, hostname, display_name FROM servers WHERE id=? LIMIT 1");
     $st->execute([$id]);
     $srv = $st->fetch(PDO::FETCH_ASSOC);
@@ -38,23 +38,52 @@ try {
       exit;
     }
 
+    // IMPORTANT:
+    // If server_public_pages row already exists -> KEEP its slug
+    // If not exists -> create with a generated slug once
+    $st2 = $db->prepare("SELECT slug FROM server_public_pages WHERE server_id=? LIMIT 1");
+    $st2->execute([$id]);
+    $existingSlug = $st2->fetchColumn();
+
+    if ($existingSlug !== false && $existingSlug !== null && trim((string) $existingSlug) !== '') {
+      // Update only enabled + updated_at, keep slug unchanged
+      $stmt = $db->prepare("
+        UPDATE server_public_pages
+        SET enabled = :enabled,
+            updated_at = strftime('%s','now')
+        WHERE server_id = :server_id
+      ");
+      $stmt->execute([
+        ':server_id' => $id,
+        ':enabled' => $enabled
+      ]);
+
+      echo json_encode([
+        'ok' => true,
+        'enabled' => (bool) $enabled,
+        'slug' => (string) $existingSlug
+      ]);
+      exit;
+    }
+
+    // Row doesn't exist yet (or slug empty) -> create it with generated slug ONCE
     $base = trim((string) ($srv['display_name'] ?? '')) ?: (string) ($srv['hostname'] ?? 'server');
     $slug = slugify($base) . '-' . (int) $srv['id'];
 
     $stmt = $db->prepare("
-    INSERT INTO server_public_pages (
-      server_id, enabled, slug, is_private, password_hash,
-      show_cpu, show_ram, show_disk, show_network, show_uptime,
-      created_at, updated_at
-    ) VALUES (
-      :server_id, :enabled, :slug, 0, NULL,
-      1, 1, 1, 1, 1,
-      strftime('%s','now'), strftime('%s','now')
-    )
-    ON CONFLICT(server_id) DO UPDATE SET
-      enabled = excluded.enabled,
-      updated_at = strftime('%s','now')
-  ");
+      INSERT INTO server_public_pages (
+        server_id, enabled, slug, is_private, password_hash,
+        show_cpu, show_ram, show_disk, show_network, show_uptime,
+        created_at, updated_at
+      ) VALUES (
+        :server_id, :enabled, :slug, 0, NULL,
+        1, 1, 1, 1, 1,
+        strftime('%s','now'), strftime('%s','now')
+      )
+      ON CONFLICT(server_id) DO UPDATE SET
+        enabled = excluded.enabled,
+        updated_at = strftime('%s','now')
+    ");
     $stmt->execute([
       ':server_id' => $id,
       ':enabled' => $enabled,

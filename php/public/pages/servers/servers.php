@@ -224,8 +224,8 @@ function osBadge(?string $os): array
                 </a>
 
                 <?php if ($pubEnabled && $pubUrl): ?>
-                  <a class="icon-btn" href="<?= htmlspecialchars($pubUrl) ?>" target="_blank"
-                    data-bs-toggle="tooltip" data-bs-title="Open public page" data-public-open="<?= $id ?>">
+                  <a class="icon-btn" href="<?= htmlspecialchars($pubUrl) ?>" target="_blank" data-bs-toggle="tooltip"
+                    data-bs-title="Open public page" data-public-open="<?= $id ?>">
                     <i class="fa-solid fa-arrow-up-right-from-square"></i>
                   </a>
                 <?php else: ?>
@@ -372,8 +372,8 @@ function osBadge(?string $os): array
   });
 
   /* =============================
-     TOGGLE PUBLIC (no reload)
-  ============================= */
+    TOGGLE PUBLIC (no reload)
+ ============================= */
   document.addEventListener('change', async (e) => {
     const el = e.target.closest('.public-toggle');
     if (!el) return;
@@ -381,6 +381,14 @@ function osBadge(?string $os): array
     const id = el.dataset.id;
     const enabled = el.checked ? '1' : '0';
     el.disabled = true;
+
+    const PUBLIC_BASE = '/preview/?slug=';
+
+    function disposeTooltip(node) {
+      if (!node || !window.bootstrap) return;
+      const inst = bootstrap.Tooltip.getInstance(node);
+      if (inst) inst.dispose();
+    }
 
     try {
       const res = await fetch('/ajax/public.php?action=toggleEnabled', {
@@ -390,7 +398,11 @@ function osBadge(?string $os): array
       });
 
       const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'Failed');
+      if (!data || !data.ok) throw new Error((data && data.error) ? data.error : 'Failed');
+
+      // IMPORTANT: use slug from response (should be the saved/custom slug)
+      const slug = (data.slug || '').toString().trim();
+      if (enabled === '1' && !slug) throw new Error('Public enabled but slug is empty');
 
       const cell = document.querySelector(`[data-public-cell="${id}"]`);
       if (!cell) return;
@@ -399,26 +411,37 @@ function osBadge(?string $os): array
       const offBadge = cell.querySelector(`[data-public-off="${id}"]`);
 
       if (enabled === '1') {
+        // remove "Off" badge
         if (offBadge) offBadge.remove();
 
+        // create or update open button
         if (!openBtn) {
           const a = document.createElement('a');
-          a.className = 'btn btn-sm btn-outline-primary icon-btn';
+          a.className = 'icon-btn'; // keep consistent with your existing markup
           a.target = '_blank';
+          a.href = PUBLIC_BASE + encodeURIComponent(slug);
+
           a.setAttribute('data-bs-toggle', 'tooltip');
           a.setAttribute('data-bs-title', 'Open public page');
           a.setAttribute('data-public-open', id);
-          a.href = '/preview/?slug=' + encodeURIComponent(data.slug);
+
           a.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square"></i>';
           cell.appendChild(a);
 
-          new bootstrap.Tooltip(a, { container: 'body', delay: { show: 200, hide: 50 } });
+          if (window.bootstrap) {
+            new bootstrap.Tooltip(a, { container: 'body', delay: { show: 200, hide: 50 } });
+          }
         } else {
-          openBtn.href = '/preview/?slug=' + encodeURIComponent(data.slug);
+          openBtn.href = PUBLIC_BASE + encodeURIComponent(slug);
         }
       } else {
-        if (openBtn) openBtn.remove();
+        // disable: remove open button + tooltip cleanly
+        if (openBtn) {
+          disposeTooltip(openBtn);
+          openBtn.remove();
+        }
 
+        // add "Off" badge if missing
         if (!offBadge) {
           const span = document.createElement('span');
           span.className = 'badge text-bg-secondary';
@@ -429,9 +452,11 @@ function osBadge(?string $os): array
       }
     } catch (err) {
       el.checked = !el.checked; // rollback
-      alert(err.message || 'Failed to update public page');
+      alert(err?.message || 'Failed to update public page');
     } finally {
       el.disabled = false;
     }
   });
+
+
 </script>
