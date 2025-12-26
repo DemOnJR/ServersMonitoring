@@ -1,43 +1,62 @@
 <?php
+declare(strict_types=1);
+
 use Server\ServerRepository;
 
-// ?? DB check
+/* =========================================================
+   DB / INSTALL GUARD
+========================================================= */
 try {
-  $db->query("SELECT 1 FROM servers LIMIT 1");
+  $db->query('SELECT 1 FROM servers LIMIT 1');
 } catch (Throwable) {
   header('Location: /install/index.php');
   exit;
 }
 
-// ?? Load servers
+/* =========================================================
+   LOAD SERVERS + STATS
+========================================================= */
 $repo = new ServerRepository($db);
 $servers = $repo->fetchAllWithLastMetric();
 
-// ?? Stats
 $total = count($servers);
-$online = count(array_filter($servers, fn($s) => $s['diff'] < OFFLINE_THRESHOLD));
-$offline = $total - $online;
+$online = count(array_filter($servers, fn($s) => (int) ($s['diff'] ?? 999999) < OFFLINE_THRESHOLD));
+$offline = max(0, $total - $online);
 
-// ?? Base URL
+/* =========================================================
+   BASE URL
+========================================================= */
 $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-$baseUrl = $scheme . '://' . $_SERVER['HTTP_HOST'];
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$baseUrl = $scheme . '://' . $host;
 
-// ?? Install commands
-$linuxCmd = "curl -fsSL {$baseUrl}/install.sh | sudo bash -s -- {$baseUrl}";
-$windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasicParsing | iex";
+/* =========================================================
+   SAFE INSTALL COMMANDS (NO PIPE)
+========================================================= */
+$linuxCmd = <<<CMD
+curl -fsSLo servermonitor-install.sh "{$baseUrl}/install/machine/?os=linux"
+sudo bash servermonitor-install.sh
+CMD;
+
+$windowsCmd = <<<CMD
+iwr -UseBasicParsing "{$baseUrl}/install/machine/?os=windows" -OutFile servermonitor-install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\\servermonitor-install.ps1
+CMD;
+
+function e(string $v): string
+{
+  return htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+}
 ?>
 
-<!-- SUMMARY CARDS -->
+<!-- SUMMARY -->
 <div class="row g-3 mb-4">
-
   <div class="col-md-4">
-    <div class="card h-100">
+    <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="text-primary fs-3">
-          <i class="fa-solid fa-server"></i>
-        </div>
+        <i class="fa-solid fa-server text-primary fs-3"></i>
         <div>
-          <div class="text-muted small">Total Servers</div>
+          <div class="text-muted small">Total servers</div>
           <div class="fs-4 fw-semibold"><?= $total ?></div>
         </div>
       </div>
@@ -45,11 +64,9 @@ $windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasi
   </div>
 
   <div class="col-md-4">
-    <div class="card h-100">
+    <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="text-success fs-3">
-          <i class="fa-solid fa-circle-check"></i>
-        </div>
+        <i class="fa-solid fa-circle-check text-success fs-3"></i>
         <div>
           <div class="text-muted small">Online</div>
           <div class="fs-4 fw-semibold text-success"><?= $online ?></div>
@@ -59,11 +76,9 @@ $windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasi
   </div>
 
   <div class="col-md-4">
-    <div class="card h-100">
+    <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
-        <div class="text-danger fs-3">
-          <i class="fa-solid fa-circle-xmark"></i>
-        </div>
+        <i class="fa-solid fa-circle-xmark text-danger fs-3"></i>
         <div>
           <div class="text-muted small">Offline</div>
           <div class="fs-4 fw-semibold text-danger"><?= $offline ?></div>
@@ -71,70 +86,75 @@ $windowsCmd = "\$env:BaseUrl=\"{$baseUrl}\"; iwr {$baseUrl}/install.ps1 -UseBasi
       </div>
     </div>
   </div>
-
 </div>
 
 <!-- INSTALL AGENT -->
-<div class="card">
+<div class="card shadow-sm">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>
       <i class="fa-solid fa-terminal me-1"></i>
       Install monitoring agent
     </strong>
 
-    <a href="https://github.com/DemOnJR/ServersMonitoring/" target="_blank" class="btn btn-sm btn-outline-secondary">
-      <i class="fa-brands fa-github"></i>
-      GitHub
+    <a href="https://github.com/DemOnJR/ServersMonitoring" target="_blank" rel="noopener"
+      class="btn btn-sm btn-outline-secondary">
+      <i class="fa-brands fa-github me-1"></i> GitHub
     </a>
   </div>
 
   <div class="card-body">
 
-    <!-- LINUX -->
-    <div class="mb-3">
-      <div class="small text-muted mb-1">
-        Linux (run as root / sudo)
-      </div>
-
-      <div class="position-relative">
-        <button class="btn btn-sm btn-outline-light position-absolute end-0 top-0 m-2"
-          onclick="navigator.clipboard.writeText(document.getElementById('linuxCmd').innerText)">
-          <i class="fa-solid fa-copy"></i>
-        </button>
-
-        <pre id="linuxCmd" class="p-3 rounded mb-0"
-          style="background:#020617;color:#e5e7eb;overflow:auto"><?= htmlspecialchars($linuxCmd) ?></pre>
-      </div>
+    <div class="alert alert-light border small mb-4">
+      <ul class="mb-0 ps-3">
+        <li>Linux: run as <code>root</code> or with <code>sudo</code></li>
+        <li>Windows: run PowerShell as <strong>Administrator</strong></li>
+        <li>The agent runs every minute and persists after reboot</li>
+      </ul>
     </div>
 
-    <!-- WINDOWS -->
+    <!-- LINUX FORM -->
+    <div class="mb-4">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-semibold">
+          <i class="fa-brands fa-linux me-1"></i> Linux
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyCmd('linuxCmd')">
+          <i class="fa-solid fa-copy me-1"></i> Copy
+        </button>
+      </div>
+
+      <pre id="linuxCmd" class="p-3 rounded mb-0"
+        style="background:#020617;color:#e5e7eb;white-space:pre-wrap"><?= e($linuxCmd) ?></pre>
+    </div>
+
+    <!-- WINDOWS FORM -->
     <div>
-      <div class="small text-muted mb-1">
-        Windows (PowerShell — run as Administrator)
-      </div>
-
-      <div class="position-relative">
-        <button class="btn btn-sm btn-outline-light position-absolute end-0 top-0 m-2"
-          onclick="navigator.clipboard.writeText(document.getElementById('windowsCmd').innerText)">
-          <i class="fa-solid fa-copy"></i>
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="fw-semibold">
+          <i class="fa-brands fa-windows me-1"></i> Windows
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyCmd('windowsCmd')">
+          <i class="fa-solid fa-copy me-1"></i> Copy
         </button>
-
-        <pre id="windowsCmd" class="p-3 rounded mb-0"
-          style="background:#020617;color:#e5e7eb;overflow:auto"><?= htmlspecialchars($windowsCmd) ?></pre>
       </div>
-    </div>
 
-    <div class="text-muted small mt-3">
-      The agent runs every minute and starts automatically after reboot.
-    </div>
-
-    <div class="text-muted small mt-3">
-      <i class="fa-brands fa-github me-1"></i>
-      Source code, documentation & issues:
-      <a href="https://github.com/DemOnJR/ServersMonitoring/" target="_blank" class="text-decoration-none">
-        github.com/DemOnJR/ServersMonitoring
-      </a>
+      <pre id="windowsCmd" class="p-3 rounded mb-0"
+        style="background:#020617;color:#e5e7eb;white-space:pre-wrap"><?= e($windowsCmd) ?></pre>
     </div>
 
   </div>
 </div>
+
+<script>
+  function copyCmd(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    navigator.clipboard.writeText(el.innerText).then(() => {
+      const btn = event.currentTarget;
+      const old = btn.innerHTML;
+      btn.innerHTML = '<i class="fa-solid fa-check me-1"></i> Copied';
+      setTimeout(() => btn.innerHTML = old, 1000);
+    });
+  }
+</script>

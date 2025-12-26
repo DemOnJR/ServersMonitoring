@@ -1,24 +1,27 @@
 <?php
 use Utils\Mask;
 use Server\ServerRepository;
+use Server\PublicPageRepository;
 
 $repo = new ServerRepository($db);
 $servers = $repo->fetchAllWithLastMetric();
+
+// Load only needed public pages for these servers (optimized)
+$serverIds = array_map(fn($x) => (int) $x['id'], $servers);
+$publicRepo = new PublicPageRepository($db);
+$publicMap = $publicRepo->mapByServerIds($serverIds);
 
 /* -----------------------------
    HELPERS (LOCAL ONLY)
 ----------------------------- */
 function humanDiff(int $seconds): string
 {
-  if ($seconds < 60) {
+  if ($seconds < 60)
     return $seconds . 's';
-  }
-  if ($seconds < 3600) {
+  if ($seconds < 3600)
     return floor($seconds / 60) . 'm';
-  }
-  if ($seconds < 86400) {
+  if ($seconds < 86400)
     return floor($seconds / 3600) . 'h';
-  }
   return floor($seconds / 86400) . 'd';
 }
 
@@ -30,7 +33,88 @@ function barColor(int $val): string
     return 'bg-warning';
   return 'bg-success';
 }
+
+function osBadge(?string $os): array
+{
+  $os = strtolower(trim((string) $os));
+  if ($os === '')
+    return ['icon' => 'fa-solid fa-server', 'label' => 'Unknown'];
+
+  if (str_contains($os, 'windows'))
+    return ['icon' => 'fa-brands fa-windows', 'label' => 'Windows'];
+
+  if (str_contains($os, 'freebsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'FreeBSD'];
+  if (str_contains($os, 'openbsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'OpenBSD'];
+  if (str_contains($os, 'netbsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'NetBSD'];
+
+  if (str_contains($os, 'ubuntu'))
+    return ['icon' => 'fa-brands fa-ubuntu', 'label' => 'Ubuntu'];
+  if (str_contains($os, 'debian'))
+    return ['icon' => 'fa-brands fa-debian', 'label' => 'Debian'];
+
+  if (str_contains($os, 'centos'))
+    return ['icon' => 'fa-brands fa-centos', 'label' => 'CentOS'];
+  if (str_contains($os, 'rocky'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'Rocky Linux'];
+  if (str_contains($os, 'alma'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'AlmaLinux'];
+  if (str_contains($os, 'red hat') || str_contains($os, 'rhel'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'RHEL'];
+  if (str_contains($os, 'fedora'))
+    return ['icon' => 'fa-brands fa-fedora', 'label' => 'Fedora'];
+
+  if (str_contains($os, 'arch'))
+    return ['icon' => 'fa-brands fa-archlinux', 'label' => 'Arch'];
+  if (str_contains($os, 'suse') || str_contains($os, 'opensuse'))
+    return ['icon' => 'fa-brands fa-suse', 'label' => 'SUSE'];
+
+  if (str_contains($os, 'alpine'))
+    return ['icon' => 'fa-solid fa-mountain', 'label' => 'Alpine'];
+
+  if (str_contains($os, 'linux'))
+    return ['icon' => 'fa-brands fa-linux', 'label' => 'Linux'];
+
+  return ['icon' => 'fa-solid fa-server', 'label' => ucfirst($os)];
+}
 ?>
+
+<style>
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  .progress-xs {
+    height: 4px;
+  }
+
+  .action-btn,
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .action-btn:hover,
+  .icon-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .public-cell {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    white-space: nowrap;
+  }
+</style>
 
 <div class="card shadow-sm">
   <div class="card-body p-2">
@@ -43,49 +127,56 @@ function barColor(int $val): string
           <th style="width:120px">RAM</th>
           <th style="width:120px">Disk</th>
           <th class="text-muted">Last seen</th>
+          <th style="width:170px">Public</th>
           <th class="text-end" style="width:40px"></th>
         </tr>
       </thead>
 
       <tbody>
         <?php foreach ($servers as $s):
+          $id = (int) $s['id'];
 
           $isOnline = ((int) $s['diff']) < OFFLINE_THRESHOLD;
 
-          // CPU %
-          $cpu = $isOnline && $s['cpu_load'] !== null
-            ? min((int) ($s['cpu_load'] * 100), 100)
-            : 0;
+          $cpu = $isOnline && $s['cpu_load'] !== null ? min((int) ($s['cpu_load'] * 100), 100) : 0;
+          $ram = ($isOnline && !empty($s['ram_total'])) ? (int) (($s['ram_used'] / $s['ram_total']) * 100) : 0;
+          $disk = ($isOnline && !empty($s['disk_total'])) ? (int) (($s['disk_used'] / $s['disk_total']) * 100) : 0;
 
-          // RAM %
-          $ram = ($isOnline && !empty($s['ram_total']))
-            ? (int) (($s['ram_used'] / $s['ram_total']) * 100)
-            : 0;
-
-          // DISK %
-          $disk = ($isOnline && !empty($s['disk_total']))
-            ? (int) (($s['disk_used'] / $s['disk_total']) * 100)
-            : 0;
+          $pub = $publicMap[$id] ?? null;
+          $pubEnabled = $pub ? ((int) $pub['enabled'] === 1) : false;
+          $pubSlug = $pub['slug'] ?? '';
+          $pubUrl = ($pubEnabled && $pubSlug) ? ('/preview/?slug=' . urlencode($pubSlug)) : '';
           ?>
 
-          <tr data-id="<?= (int) $s['id'] ?>">
+          <tr data-id="<?= $id ?>">
 
             <!-- SERVER -->
             <td>
+              <?php $os = osBadge($s['os_name'] ?? null); ?>
+
               <div class="d-flex align-items-center gap-2">
                 <span class="status-dot <?= $isOnline ? 'bg-success' : 'bg-danger' ?>"></span>
+
+                <span class="os-ic text-muted" data-bs-toggle="tooltip"
+                  data-bs-title="<?= htmlspecialchars((string) ($s['os_name'] ?? 'Unknown')) ?>">
+                  <i class="<?= htmlspecialchars($os['icon']) ?>"></i>
+                </span>
 
                 <span class="server-name-text fw-semibold" role="button">
                   <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
                 </span>
+
+                <span class="badge text-bg-light border os-badge">
+                  <?= htmlspecialchars($os['label']) ?>
+                </span>
               </div>
 
-              <input type="text" class="form-control form-control-sm server-name-input d-none mt-1"
-                data-id="<?= (int) $s['id'] ?>" value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
+              <input type="text" class="form-control form-control-sm server-name-input d-none mt-1" data-id="<?= $id ?>"
+                value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
 
               <small class="text-muted">
-                <a href="/?page=server&id=<?= (int) $s['id'] ?>" class="text-decoration-none text-muted">
-                  <?= Mask::ip($s['ip']) ?>
+                <a href="/?page=server&id=<?= $id ?>" class="text-decoration-none text-muted">
+                  <?= Mask::ip($s['ip']) ?> <sub><i class="fa-solid fa-arrow-up-right-from-square"></i></sub>
                 </a>
               </small>
             </td>
@@ -119,21 +210,61 @@ function barColor(int $val): string
               <?= humanDiff((int) $s['diff']) ?> ago
             </td>
 
+            <!-- PUBLIC -->
+            <td>
+              <div class="public-cell" data-public-cell="<?= $id ?>">
+                <div class="form-check form-switch m-0">
+                  <input class="form-check-input public-toggle" type="checkbox" role="switch" data-id="<?= $id ?>"
+                    <?= $pubEnabled ? 'checked' : '' ?>>
+                </div>
+
+                <a class="btn btn-sm btn-outline-secondary py-0" href="/?page=public&id=<?= $id ?>"
+                  data-bs-toggle="tooltip" data-bs-title="Public page settings">
+                  Settings
+                </a>
+
+                <?php if ($pubEnabled && $pubUrl): ?>
+                  <a class="icon-btn" href="<?= htmlspecialchars($pubUrl) ?>" target="_blank" data-bs-toggle="tooltip"
+                    data-bs-title="Open public page" data-public-open="<?= $id ?>">
+                    <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                  </a>
+                <?php else: ?>
+                  <span class="badge text-bg-secondary" data-public-off="<?= $id ?>">Off</span>
+                <?php endif; ?>
+              </div>
+            </td>
+
             <!-- ACTIONS -->
             <td class="text-end">
               <div class="dropdown">
-                <button class="btn btn-sm btn-link text-muted p-0" data-bs-toggle="dropdown" aria-expanded="false">
-                  <i class="fa-solid fa-ellipsis-vertical"></i>
+                <button class="btn btn-sm btn-outline-secondary action-btn" data-bs-toggle="dropdown"
+                  aria-expanded="false" data-bs-auto-close="outside" title="Actions">
+                  <i class="fa-solid fa-ellipsis"></i>
                 </button>
 
-                <ul class="dropdown-menu dropdown-menu-end">
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
                   <li>
-                    <a class="dropdown-item" href="/?page=server&id=<?= (int) $s['id'] ?>">
+                    <a class="dropdown-item d-flex align-items-center gap-2" href="/?page=server&id=<?= $id ?>">
+                      <i class="fa-solid fa-eye text-muted"></i>
                       View
                     </a>
                   </li>
+
                   <li>
-                    <button class="dropdown-item text-danger server-delete-btn" data-id="<?= (int) $s['id'] ?>">
+                    <a class="dropdown-item d-flex align-items-center gap-2" href="/?page=public&id=<?= $id ?>">
+                      <i class="fa-solid fa-globe text-muted"></i>
+                      Public page settings
+                    </a>
+                  </li>
+
+                  <li>
+                    <hr class="dropdown-divider">
+                  </li>
+
+                  <li>
+                    <button class="dropdown-item d-flex align-items-center gap-2 text-danger server-delete-btn"
+                      data-id="<?= $id ?>">
+                      <i class="fa-solid fa-trash"></i>
                       Delete
                     </button>
                   </li>
@@ -170,19 +301,6 @@ function barColor(int $val): string
   </div>
 </div>
 
-<style>
-  .status-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  .progress-xs {
-    height: 4px;
-  }
-</style>
-
 <script>
   /* =============================
      DATATABLE
@@ -193,7 +311,7 @@ function barColor(int $val): string
       stateSave: true,
       order: [[4, 'asc']],
       columnDefs: [
-        { orderable: false, targets: [5] }
+        { orderable: false, targets: [5, 6] } // Public + Actions
       ]
     });
   });
@@ -251,5 +369,92 @@ function barColor(int $val): string
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ id: deleteId })
     }).then(() => location.reload());
+  });
+
+  /* =============================
+    TOGGLE PUBLIC (no reload)
+ ============================= */
+  document.addEventListener('change', async (e) => {
+    const el = e.target.closest('.public-toggle');
+    if (!el) return;
+
+    const id = el.dataset.id;
+    const enabled = el.checked ? '1' : '0';
+    el.disabled = true;
+
+    const PUBLIC_BASE = '/preview/?slug=';
+
+    function disposeTooltip(node) {
+      if (!node || !window.bootstrap) return;
+      const inst = bootstrap.Tooltip.getInstance(node);
+      if (inst) inst.dispose();
+    }
+
+    try {
+      const res = await fetch('/ajax/public.php?action=toggleEnabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ id, enabled })
+      });
+
+      const data = await res.json();
+      if (!data || !data.ok) throw new Error((data && data.error) ? data.error : 'Failed');
+
+      // IMPORTANT: use slug from response (should be the saved/custom slug)
+      const slug = (data.slug || '').toString().trim();
+      if (enabled === '1' && !slug) throw new Error('Public enabled but slug is empty');
+
+      const cell = document.querySelector(`[data-public-cell="${id}"]`);
+      if (!cell) return;
+
+      const openBtn = cell.querySelector(`[data-public-open="${id}"]`);
+      const offBadge = cell.querySelector(`[data-public-off="${id}"]`);
+
+      if (enabled === '1') {
+        // remove "Off" badge
+        if (offBadge) offBadge.remove();
+
+        // create or update open button
+        if (!openBtn) {
+          const a = document.createElement('a');
+          a.className = 'icon-btn'; // keep consistent with your existing markup
+          a.target = '_blank';
+          a.href = PUBLIC_BASE + encodeURIComponent(slug);
+
+          a.setAttribute('data-bs-toggle', 'tooltip');
+          a.setAttribute('data-bs-title', 'Open public page');
+          a.setAttribute('data-public-open', id);
+
+          a.innerHTML = '<i class="fa-solid fa-arrow-up-right-from-square"></i>';
+          cell.appendChild(a);
+
+          if (window.bootstrap) {
+            new bootstrap.Tooltip(a, { container: 'body', delay: { show: 200, hide: 50 } });
+          }
+        } else {
+          openBtn.href = PUBLIC_BASE + encodeURIComponent(slug);
+        }
+      } else {
+        // disable: remove open button + tooltip cleanly
+        if (openBtn) {
+          disposeTooltip(openBtn);
+          openBtn.remove();
+        }
+
+        // add "Off" badge if missing
+        if (!offBadge) {
+          const span = document.createElement('span');
+          span.className = 'badge text-bg-secondary';
+          span.setAttribute('data-public-off', id);
+          span.textContent = 'Off';
+          cell.appendChild(span);
+        }
+      }
+    } catch (err) {
+      el.checked = !el.checked; // rollback
+      alert(err?.message || 'Failed to update public page');
+    } finally {
+      el.disabled = false;
+    }
   });
 </script>

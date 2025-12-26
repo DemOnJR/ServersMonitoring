@@ -105,3 +105,19 @@ if (!$db instanceof \PDO) {
   http_response_code(500);
   exit('Database not initialized');
 }
+
+function appBaseUrl(): string
+{
+  // Proxy-safe scheme
+  $proto = $_SERVER['HTTP_X_FORWARDED_PROTO']
+    ?? ($_SERVER['REQUEST_SCHEME'] ?? (($_SERVER['HTTPS'] ?? '') === 'on' ? 'https' : 'http'));
+
+  // Proxy-safe host
+  $host = $_SERVER['HTTP_X_FORWARDED_HOST']
+    ?? ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost');
+
+  // If multiple forwarded hosts: "a,b" -> take first
+  $host = trim(explode(',', $host)[0]);
+
+  return $proto . '://' . $host;
+}
