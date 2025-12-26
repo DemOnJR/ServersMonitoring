@@ -7,7 +7,7 @@ use Auth\Guard;
 use Server\ServerRepository;
 use Server\ServerService;
 
-// ?? Only logged-in users
+// Only logged-in users
 Guard::protect();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

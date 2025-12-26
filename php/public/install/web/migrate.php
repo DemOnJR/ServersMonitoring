@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../App/Bootstrap.php';
+require_once __DIR__ . '/../../../App/Bootstrap.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(403);
@@ -23,7 +23,7 @@ if ($action === 'password') {
 
     $hash = password_hash($pass, PASSWORD_DEFAULT);
 
-    $file = __DIR__ . '/../../config/config.local.php';
+    $file = __DIR__ . '/../../../config/config.local.php';
 
     $content = <<<PHP
 <?php

@@ -7,7 +7,7 @@ use Auth\Guard;
 Guard::protect();
 
 /**
- * ROUTES (SAFE WHITELIST)
+ * ROUTES
  */
 $routes = [
   'dashboard' => 'dashboard.php',
@@ -15,6 +15,8 @@ $routes = [
   // servers
   'servers' => 'servers/servers.php',
   'server' => 'servers/server.php',
+
+  'public' => 'servers/public.php',
 
   // alerts
   'alerts-general' => 'alerts/general.php',
@@ -34,6 +36,7 @@ $contentFile = __DIR__ . '/pages/' . $routes[$page];
 // menu state
 $isServers = str_starts_with($page, 'server');
 $isAlerts = str_starts_with($page, 'alerts');
+
 ?>
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="dark">
@@ -54,6 +57,12 @@ $isAlerts = str_starts_with($page, 'alerts');
   <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css">
   <script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
   <script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+
+  <!-- highlight.js -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/powershell.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
 
   <style>
     body {
@@ -203,6 +212,7 @@ $isAlerts = str_starts_with($page, 'alerts');
       </a>
 
     </aside>
+
 
     <!-- CONTENT -->
     <main class="flex-grow-1 p-4">
