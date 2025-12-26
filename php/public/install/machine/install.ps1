@@ -5,9 +5,9 @@ $ApiUrl = "__API_URL__"
 $Token = "__TOKEN__"
 
 $InstallDir = "C:\ProgramData\server-monitor"
-$AgentPath = Join-Path $InstallDir "agent.ps1"
-$TokenPath = Join-Path $InstallDir "agent_id"
-$TaskName = "ServerMonitorAgent"
+$AgentPath  = Join-Path $InstallDir "agent.ps1"
+$TokenPath  = Join-Path $InstallDir "agent_id"
+$TaskName   = "ServerMonitorAgent"
 
 Write-Host "Installing Server Monitor Agent (Windows)"
 Write-Host "API: $ApiUrl"
@@ -28,44 +28,50 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$BaseDir   = "C:\ProgramData\server-monitor"
-$TokenFile = Join-Path $BaseDir "agent_id"
-$LogFile   = Join-Path $BaseDir "agent.log"
+$BaseDir    = "C:\ProgramData\server-monitor"
+$TokenFile  = Join-Path $BaseDir "agent_id"
+$LogFile    = Join-Path $BaseDir "agent.log"
+
+$DiskCache  = Join-Path $BaseDir "disks_cache.json"
+$DiskCacheRefreshSec = 3600  # 1h; safe because CIM is best-effort
+
+$CpuCache  = Join-Path $BaseDir "cpu_cache.json"
+$CpuCacheRefreshSec = 3600  # 1h
 
 function Ensure-Dir([string]$dir) {
-  if (-not (Test-Path -LiteralPath $dir)) {
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  }
+  try {
+    if (-not (Test-Path -LiteralPath $dir)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+  } catch {}
 }
 
 function Log([string]$msg) {
-  Ensure-Dir $BaseDir
-  $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $msg"
-
-  if (-not $NoFileLog) {
-    Add-Content -Path $LogFile -Value $line -Encoding UTF8
-  }
-
-  Write-Host $line
+  # Logging must never crash the agent.
+  try {
+    Ensure-Dir $BaseDir
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') | $msg"
+    if (-not $NoFileLog) {
+      try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {}
+    }
+    try { Write-Host $line } catch {}
+  } catch {}
 }
-
 
 function Die([string]$msg) {
   Log "FATAL: $msg"
   throw $msg
 }
 
-# Win32 P/Invoke (no WMI/CIM/Get-Counter => no hangs)
-Add-Type -Language CSharp -TypeDefinition @"
+# ---- Native helpers (guard Add-Type so repeated runs don't recompile) ----
+if (-not ("Native" -as [type])) {
+  Add-Type -Language CSharp -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 
 public static class Native {
   [StructLayout(LayoutKind.Sequential)]
-  public struct FILETIME {
-    public uint dwLowDateTime;
-    public uint dwHighDateTime;
-  }
+  public struct FILETIME { public uint dwLowDateTime; public uint dwHighDateTime; }
 
   [DllImport("kernel32.dll", SetLastError=true)]
   public static extern bool GetSystemTimes(out FILETIME idle, out FILETIME kernel, out FILETIME user);
@@ -94,11 +100,26 @@ public static class Native {
   }
 }
 "@ | Out-Null
+}
 
 function Redact-Token([string]$tok) {
   if ([string]::IsNullOrWhiteSpace($tok)) { return "" }
   $n = [Math]::Min(8, $tok.Length)
   return ($tok.Substring(0, $n) + "…")
+}
+
+function To-Int64Safe($v, [int64]$default = 0) {
+  try {
+    if ($null -eq $v) { return $default }
+    return [int64]$v
+  } catch { return $default }
+}
+
+function To-IntSafe($v, [int]$default = 0) {
+  try {
+    if ($null -eq $v) { return $default }
+    return [int]$v
+  } catch { return $default }
 }
 
 function Get-CpuUsageFraction {
@@ -150,7 +171,6 @@ function Get-AllFixedDrivesDiskKB {
     $drives = [System.IO.DriveInfo]::GetDrives()
     foreach ($d in $drives) {
       try {
-        # Only local disks (not CD-ROM, not removable) and must be ready
         if ($d.DriveType -ne [System.IO.DriveType]::Fixed) { continue }
         if (-not $d.IsReady) { continue }
 
@@ -167,13 +187,13 @@ function Get-AllFixedDrivesDiskKB {
         }
 
         $list += [ordered]@{
-          filesystem   = $d.Name.TrimEnd('\')   # e.g. "C:"
-          fstype       = ""                      # optional; can stay blank on Windows
+          filesystem   = $d.Name.TrimEnd('\')
+          fstype       = ""
           total_kb     = $totalKB
           used_kb      = $usedKB
           avail_kb     = $freeKB
           used_percent = $usedPct
-          mount        = $d.Name                # e.g. "C:\"
+          mount        = $d.Name
         }
       } catch {}
     }
@@ -241,6 +261,300 @@ function Get-OsInfo {
   return @{ os=$osCaption; kernel=$kernel }
 }
 
+# ---- Best-effort hardware inventory (CIM) with timeout + cache ----
+
+function Invoke-WithTimeout {
+  param(
+    [Parameter(Mandatory=$true, Position=0)]
+    [ScriptBlock]$Script,
+    [int]$TimeoutSec = 2
+  )
+
+  if ($null -eq $Script) { return $null }
+
+  $job = $null
+  try {
+    $job = Start-Job -ScriptBlock $Script
+  } catch {
+    return $null
+  }
+
+  try {
+    if (Wait-Job -Job $job -Timeout $TimeoutSec) {
+      try { return Receive-Job -Job $job -ErrorAction SilentlyContinue } catch { return $null }
+    } else {
+      try { Stop-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+      return $null
+    }
+  } finally {
+    try { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+  }
+}
+
+function Load-JsonFile($path) {
+  try {
+    if (Test-Path -LiteralPath $path) {
+      $txt = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+      if (-not [string]::IsNullOrWhiteSpace($txt)) {
+        return ($txt | ConvertFrom-Json -ErrorAction Stop)
+      }
+    }
+  } catch {}
+  return $null
+}
+
+function Save-JsonFileAtomic($path, $obj) {
+  try {
+    $tmp = ($path + ".tmp")
+    ($obj | ConvertTo-Json -Depth 8 -Compress) | Set-Content -LiteralPath $tmp -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $path -Force
+  } catch {}
+}
+
+function Get-DisksJsonBestEffort {
+  $rows = Invoke-WithTimeout {
+    try {
+      Get-CimInstance Win32_DiskDrive -ErrorAction Stop |
+        Select-Object Model, Size, MediaType, InterfaceType
+    } catch { $null }
+  } -TimeoutSec 2
+
+  $out = @()
+  if ($rows -eq $null) { return $out }
+
+  foreach ($d in $rows) {
+    $model = ""
+    if ($d.Model) { $model = ([string]$d.Model).Trim() }
+    if ([string]::IsNullOrWhiteSpace($model)) { continue }
+
+    $sizeG = ""
+    try {
+      $b = [double]$d.Size
+      if ($b -gt 0) { $sizeG = ("{0}G" -f [int][Math]::Round($b / 1GB)) }
+    } catch {}
+
+    $mediaNorm = "hdd"
+    $mt = ""
+    if ($d.MediaType) { $mt = [string]$d.MediaType }
+    if ($mt -match 'SSD' -or $model -match 'NVMe') { $mediaNorm = "ssd" }
+
+    $out += [ordered]@{
+      name  = $model
+      size  = $sizeG
+      media = $mediaNorm
+      model = $model
+    }
+  }
+
+  return $out
+}
+
+function Get-DisksJsonCached {
+  try {
+    if (Test-Path -LiteralPath $DiskCache) {
+      $age = (Get-Date) - (Get-Item -LiteralPath $DiskCache).LastWriteTime
+      if ($age.TotalSeconds -lt $DiskCacheRefreshSec) {
+        $cached = Load-JsonFile $DiskCache
+        if ($cached) { return $cached }
+      }
+    }
+  } catch {}
+
+  $fresh = Get-DisksJsonBestEffort
+  if ($fresh -and $fresh.Count -gt 0) {
+    Save-JsonFileAtomic -path $DiskCache -obj $fresh
+    return $fresh
+  }
+
+  $cached2 = Load-JsonFile $DiskCache
+  if ($cached2) { return $cached2 }
+
+  return @()
+}
+
+function Safe-ConvertToJson($obj, [int]$depth = 10) {
+  try {
+    return ($obj | ConvertTo-Json -Depth $depth -Compress -ErrorAction Stop)
+  } catch {
+    # last-resort: minimal payload
+    try {
+      $mini = [ordered]@{ hostname = $obj.hostname; metrics = $obj.metrics }
+      return ($mini | ConvertTo-Json -Depth 6 -Compress)
+    } catch {
+      return "{}"
+    }
+  }
+}
+
+function Get-CpuMhzFromRegistry {
+  $out = @{ max_mhz = $null; min_mhz = $null }
+
+  try {
+    $p = Get-ItemProperty -Path "HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0" -ErrorAction Stop
+    if ($p.'~MHz') {
+      $mhz = To-IntSafe $p.'~MHz' 0
+      if ($mhz -gt 0) {
+        $out.min_mhz = $mhz
+      }
+    }
+  } catch {}
+
+  return $out
+}
+
+function Get-CpuMhzFromCimViaChildProcess([int]$TimeoutSec = 2) {
+  # Runs in a separate powershell process so it can be killed if it hangs.
+  $out = @{ max_mhz = $null; min_mhz = $null }
+
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "PowerShell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"try { " +
+      '$p=Get-CimInstance Win32_Processor | Select-Object -First 1 MaxClockSpeed,CurrentClockSpeed; ' +
+      '$o=@{max_mhz=$p.MaxClockSpeed; min_mhz=$p.CurrentClockSpeed}; ' +
+      '$o | ConvertTo-Json -Compress } catch { "" }' +
+      "`""
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+      try { $proc.Kill() } catch {}
+      return $out
+    }
+
+    $txt = $proc.StandardOutput.ReadToEnd().Trim()
+    if (-not [string]::IsNullOrWhiteSpace($txt)) {
+      $obj = $txt | ConvertFrom-Json -ErrorAction Stop
+      $max = To-IntSafe $obj.max_mhz 0
+      $min = To-IntSafe $obj.min_mhz 0
+      if ($max -gt 0) { $out.max_mhz = $max }
+      if ($min -gt 0) { $out.min_mhz = $min }
+    }
+  } catch {}
+
+  return $out
+}
+
+function Get-CpuMhzBestEffort {
+  # 1) registry is instant and stable
+  $r = Get-CpuMhzFromRegistry
+
+  # 2) try to get max_mhz from CIM safely (child process timeout)
+  $c = Get-CpuMhzFromCimViaChildProcess 2
+
+  $max = $null
+  $min = $null
+
+  if ($c.max_mhz -ne $null) { $max = $c.max_mhz }
+  if ($c.min_mhz -ne $null) { $min = $c.min_mhz }
+
+  # If CIM didn't give min, use registry min
+  if ($min -eq $null -and $r.min_mhz -ne $null) { $min = $r.min_mhz }
+
+  # If max missing, fallback to min (better than null)
+  if ($max -eq $null -and $min -ne $null) { $max = $min }
+
+  return @{ max_mhz = $max; min_mhz = $min }
+}
+
+function Get-CpuMhzCached {
+  try {
+    if (Test-Path -LiteralPath $CpuCache) {
+      $age = (Get-Date) - (Get-Item -LiteralPath $CpuCache).LastWriteTime
+      if ($age.TotalSeconds -lt $CpuCacheRefreshSec) {
+        $cached = Load-JsonFile $CpuCache
+        if ($cached) {
+          $max = To-IntSafe $cached.max_mhz 0
+          $min = To-IntSafe $cached.min_mhz 0
+          return @{
+            max_mhz = ($(if ($max -gt 0) { $max } else { $null }))
+            min_mhz = ($(if ($min -gt 0) { $min } else { $null }))
+          }
+        }
+      }
+    }
+  } catch {}
+
+  $fresh = Get-CpuMhzBestEffort
+  if ($fresh -and ($fresh.max_mhz -ne $null -or $fresh.min_mhz -ne $null)) {
+    Save-JsonFileAtomic -path $CpuCache -obj $fresh
+    return $fresh
+  }
+
+  return @{ max_mhz = $null; min_mhz = $null }
+}
+
+function Get-MachineId {
+  # Stable per OS install
+  try {
+    $p = Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Cryptography" -ErrorAction Stop
+    $g = ([string]$p.MachineGuid).Trim()
+    if ($g) { return $g }
+  } catch {}
+  return ""
+}
+
+function Get-DmiUuidViaChildProcess([int]$TimeoutSec = 2) {
+  $uuid = ""
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "PowerShell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"try { " +
+      '$u=(Get-CimInstance Win32_ComputerSystemProduct | Select-Object -First 1 -ExpandProperty UUID); ' +
+      'if($u){$u=$u.ToString().Trim()}; $u } catch { "" }' +
+      "`""
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $p = [System.Diagnostics.Process]::Start($psi)
+    if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+      try { $p.Kill() } catch {}
+      return ""
+    }
+
+    $txt = $p.StandardOutput.ReadToEnd().Trim()
+    if ($txt) { $uuid = $txt }
+  } catch {}
+
+  # Filter out common junk values
+  if ($uuid -match '^(00000000-0000-0000-0000-000000000000|FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF)$') { return "" }
+  return $uuid
+}
+
+function Get-MacsString {
+  $macs = @()
+  try {
+    $ifaces = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()
+    foreach ($nic in $ifaces) {
+      try {
+        if ($nic.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback) { continue }
+        if ($nic.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+
+        $pa = $nic.GetPhysicalAddress()
+        if ($pa -eq $null) { continue }
+
+        $s = $pa.ToString()
+        if ([string]::IsNullOrWhiteSpace($s)) { continue }
+        if ($s.Length -lt 12) { continue }
+
+        # Convert AABBCC... -> AA-BB-CC-...
+        $bytes = $pa.GetAddressBytes()
+        if ($bytes -and $bytes.Length -ge 6) {
+          $fmt = ($bytes | ForEach-Object { "{0:X2}" -f $_ }) -join "-"
+          if ($fmt -and ($macs -notcontains $fmt)) { $macs += $fmt }
+        }
+      } catch {}
+    }
+  } catch {}
+
+  return ($macs -join ",")
+}
+
 try {
   Log "Agent start"
   Log "STEP 1: validating inputs"
@@ -264,23 +578,28 @@ try {
   Log "STEP 4: cpu/mem/disk metrics"
   $cpuLoad = Get-CpuUsageFraction
   $mem = Get-MemoryMB
-  $ramTotalMB = $mem.totalMB
-  $ramUsedMB  = $mem.usedMB
+  $ramTotalMB = To-IntSafe $mem.totalMB 0
+  $ramUsedMB  = To-IntSafe $mem.usedMB 0
 
   $sysDrive = $env:SystemDrive
   if ([string]::IsNullOrWhiteSpace($sysDrive)) { $sysDrive = "C:" }
   $sysDrive = $sysDrive.TrimEnd('\')
 
   $filesystems = Get-AllFixedDrivesDiskKB
-  $sum = Sum-DisksKB $filesystems
+  if ($null -eq $filesystems) { $filesystems = @() }
 
-  $diskTotalKB = [int64]$sum.total_kb
-  $diskUsedKB  = [int64]$sum.used_kb
+  $sum = Sum-DisksKB $filesystems
+  $diskTotalKB = To-Int64Safe $sum.total_kb 0
+  $diskUsedKB  = To-Int64Safe $sum.used_kb 0
+
+  Log "STEP 4b: inventory disks_json (best-effort, cached)"
+  $disksJson = Get-DisksJsonCached
+  try { Log ("disks_json count=" + (($disksJson | Measure-Object).Count)) } catch { Log "disks_json count=?" }
 
   Log "STEP 5: network counters"
   $net = Get-NetworkTotalsBytes
-  $rxBytes = $net.rx
-  $txBytes = $net.tx
+  $rxBytes = To-Int64Safe $net.rx 0
+  $txBytes = To-Int64Safe $net.tx 0
 
   $procTotal = 0
   try { $procTotal = [System.Diagnostics.Process]::GetProcesses().Length } catch { $procTotal = 0 }
@@ -289,38 +608,51 @@ try {
   $cpuInfo = Get-CpuInfoFromRegistry
   $osInfo  = Get-OsInfo
 
+  $cpuMhz = Get-CpuMhzCached
+
+  $machineId = Get-MachineId
+  $dmiUuid   = Get-DmiUuidViaChildProcess 2
+  $macsStr   = Get-MacsString
+
   Log "STEP 6: build payload"
   $payloadObj = [ordered]@{
     hostname = $Hostname
     agent    = @{ token = $AgentToken }
     machine  = @{
-      machine_id = ""
-      boot_id    = ""
+      machine_id = $machineId
+      dmi_uuid   = $dmiUuid
+      macs       = $macsStr  
+
       cpu_model  = $cpuInfo.name
       cpu_vendor = $cpuInfo.vendor
-      cpu_cores  = [int]$cpuInfo.cores
+      cpu_cores  = To-IntSafe $cpuInfo.cores 0
       cpu_arch   = $cpuInfo.arch
       fs_root    = $sysDrive
+
+      cpu_max_mhz = $cpuMhz.max_mhz
+      cpu_min_mhz = $cpuMhz.min_mhz
+
+      disks      = ($filesystems | ForEach-Object { $_.filesystem } | Sort-Object) -join ";"
+      disks_json = $disksJson
     }
     metrics  = @{
       cpu        = [string]$cpuLoad
-      ram_used   = [int]$ramUsedMB
-      ram_total  = [int]$ramTotalMB
-      disk_used  = [int64]$diskUsedKB
-      disk_total = [int64]$diskTotalKB
-      rx_bytes   = [int64]$rxBytes
-      tx_bytes   = [int64]$txBytes
-      processes  = [int]$procTotal
+      ram_used   = $ramUsedMB
+      ram_total  = $ramTotalMB
+      disk_used  = $diskUsedKB
+      disk_total = $diskTotalKB
+      rx_bytes   = $rxBytes
+      tx_bytes   = $txBytes
+      processes  = To-IntSafe $procTotal 0
       zombies    = 0
       os         = $osInfo.os
       kernel     = $osInfo.kernel
       uptime     = $uptime
-
       filesystems_json = $filesystems
     }
   }
 
-  $payloadJson = $payloadObj | ConvertTo-Json -Depth 10 -Compress
+  $payloadJson = Safe-ConvertToJson $payloadObj 10
   Log ("Payload bytes=" + ([Text.Encoding]::UTF8.GetByteCount($payloadJson)))
 
   if ($VerboseLog) {
@@ -330,7 +662,7 @@ try {
       machine  = $payloadObj.machine
       metrics  = $payloadObj.metrics
     }
-    Log ("DEBUG payload=" + ($safeObj | ConvertTo-Json -Depth 10 -Compress))
+    Log ("DEBUG payload=" + (Safe-ConvertToJson $safeObj 10))
   }
 
   if ($DryRun) {
@@ -343,15 +675,35 @@ try {
 
   Log "STEP 7: send POST -> report.php"
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
   $headers = @{ "X-Agent-Token" = $AgentToken }
-  $resp = Invoke-RestMethod -Uri $ApiUrl -Method POST -ContentType "application/json" -Headers $headers -Body $payloadJson -TimeoutSec 15
 
-  $respJson = ""
-  try { $respJson = ($resp | ConvertTo-Json -Compress) } catch { $respJson = [string]$resp }
+  try {
+    $resp = Invoke-RestMethod -Uri $ApiUrl -Method POST -ContentType "application/json" -Headers $headers -Body $payloadJson -TimeoutSec 15
 
-  Log "RESPONSE: $respJson"
-  Log "OK: payload sent"
-  exit 0
+    $respJson = ""
+    try { $respJson = ($resp | ConvertTo-Json -Compress) } catch { $respJson = [string]$resp }
+
+    Log "RESPONSE: $respJson"
+    Log "OK: payload sent"
+    exit 0
+  } catch {
+    $msg = $_.Exception.Message
+    try { Log ("HTTP ERROR: " + $msg) } catch {}
+
+    # Try to show response body if present
+    try {
+      if ($_.Exception.Response -and $_.Exception.Response.GetResponseStream) {
+        $sr = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+        $body = $sr.ReadToEnd()
+        if (-not [string]::IsNullOrWhiteSpace($body)) {
+          Log ("HTTP BODY: " + $body)
+        }
+      }
+    } catch {}
+
+    throw
+  }
 }
 catch {
   $msg = $_.Exception.Message
