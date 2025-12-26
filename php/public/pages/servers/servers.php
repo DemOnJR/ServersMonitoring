@@ -30,6 +30,62 @@ function barColor(int $val): string
     return 'bg-warning';
   return 'bg-success';
 }
+
+function osBadge(?string $os): array
+{
+  $os = strtolower(trim((string) $os));
+
+  // Normalize common strings from PRETTY_NAME
+  if ($os === '')
+    return ['icon' => 'fa-solid fa-server', 'label' => 'Unknown'];
+
+  // Windows
+  if (str_contains($os, 'windows'))
+    return ['icon' => 'fa-brands fa-windows', 'label' => 'Windows'];
+
+  // BSD
+  if (str_contains($os, 'freebsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'FreeBSD'];
+  if (str_contains($os, 'openbsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'OpenBSD'];
+  if (str_contains($os, 'netbsd'))
+    return ['icon' => 'fa-solid fa-anchor', 'label' => 'NetBSD'];
+
+  // Linux distros
+  if (str_contains($os, 'ubuntu'))
+    return ['icon' => 'fa-brands fa-ubuntu', 'label' => 'Ubuntu'];
+  if (str_contains($os, 'debian'))
+    return ['icon' => 'fa-brands fa-debian', 'label' => 'Debian'];
+
+  // RHEL family
+  if (str_contains($os, 'centos'))
+    return ['icon' => 'fa-brands fa-centos', 'label' => 'CentOS'];
+  if (str_contains($os, 'rocky'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'Rocky Linux'];
+  if (str_contains($os, 'alma'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'AlmaLinux'];
+  if (str_contains($os, 'red hat') || str_contains($os, 'rhel'))
+    return ['icon' => 'fa-brands fa-redhat', 'label' => 'RHEL'];
+  if (str_contains($os, 'fedora'))
+    return ['icon' => 'fa-brands fa-fedora', 'label' => 'Fedora'];
+
+  // Arch / SUSE
+  if (str_contains($os, 'arch'))
+    return ['icon' => 'fa-brands fa-archlinux', 'label' => 'Arch'];
+  if (str_contains($os, 'suse') || str_contains($os, 'opensuse'))
+    return ['icon' => 'fa-brands fa-suse', 'label' => 'SUSE'];
+
+  // Alpine
+  if (str_contains($os, 'alpine'))
+    return ['icon' => 'fa-solid fa-mountain', 'label' => 'Alpine'];
+
+  // Generic linux
+  if (str_contains($os, 'linux'))
+    return ['icon' => 'fa-brands fa-linux', 'label' => 'Linux'];
+
+  // Fallback: show generic server icon
+  return ['icon' => 'fa-solid fa-server', 'label' => ucfirst($os)];
+}
 ?>
 
 <div class="card shadow-sm">
@@ -72,13 +128,25 @@ function barColor(int $val): string
 
             <!-- SERVER -->
             <td>
+              <?php $os = osBadge($s['os_name'] ?? null); ?>
+
               <div class="d-flex align-items-center gap-2">
                 <span class="status-dot <?= $isOnline ? 'bg-success' : 'bg-danger' ?>"></span>
+
+                <span class="os-ic text-muted" data-bs-toggle="tooltip"
+                  data-bs-title="<?= htmlspecialchars((string) ($s['os_name'] ?? 'Unknown')) ?>">
+                  <i class="<?= htmlspecialchars($os['icon']) ?>"></i>
+                </span>
 
                 <span class="server-name-text fw-semibold" role="button">
                   <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
                 </span>
+
+                <span class="badge text-bg-light border os-badge">
+                  <?= htmlspecialchars($os['label']) ?>
+                </span>
               </div>
+
 
               <input type="text" class="form-control form-control-sm server-name-input d-none mt-1"
                 data-id="<?= (int) $s['id'] ?>" value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
