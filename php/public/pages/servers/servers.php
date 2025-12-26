@@ -457,6 +457,4 @@ function osBadge(?string $os): array
       el.disabled = false;
     }
   });
-
-
 </script>
