@@ -15,6 +15,7 @@ $routes = [
   // servers
   'servers' => 'servers/servers.php',
   'server' => 'servers/server.php',
+
   'public' => 'servers/public.php',
 
   // alerts

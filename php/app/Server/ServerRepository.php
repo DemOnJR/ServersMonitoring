@@ -243,4 +243,59 @@ class ServerRepository
     ]);
     return (int) $this->db->lastInsertId();
   }
+
+
+  // ==================================================
+  // PUBLIC PAGE (enabled + slug)
+  // ==================================================
+  public function getPublicPage(int $serverId): array
+  {
+    $stmt = $this->db->prepare("
+      SELECT enabled, slug
+      FROM server_public_pages
+      WHERE server_id = ?
+      LIMIT 1
+    ");
+    $stmt->execute([$serverId]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+    return [
+      'enabled' => (int) ($row['enabled'] ?? 0),
+      'slug' => (string) ($row['slug'] ?? ''),
+    ];
+  }
+
+  // ==================================================
+  // IP HISTORY
+  // ==================================================
+  public function getIpHistory(int $serverId, int $limit = 50): array
+  {
+    $limit = max(1, min($limit, 500)); // safety
+
+    // LIMIT isn't always parameterizable across drivers; safest is inline integer
+    $sql = "
+      SELECT ip, first_seen, last_seen, seen_count
+      FROM server_ip_history
+      WHERE server_id = ?
+      ORDER BY last_seen DESC
+      LIMIT {$limit}
+    ";
+
+    $stmt = $this->db->prepare($sql);
+    $stmt->execute([$serverId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+  }
+
+  // ==================================================
+  // JSON helper (optional)
+  // ==================================================
+  public function decodeJsonArray(mixed $json): array
+  {
+    if (!$json)
+      return [];
+    $tmp = json_decode((string) $json, true);
+    return is_array($tmp) ? $tmp : [];
+  }
+
 }
