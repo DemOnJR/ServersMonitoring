@@ -15,6 +15,7 @@ $routes = [
   // servers
   'servers' => 'servers/servers.php',
   'server' => 'servers/server.php',
+  'public' => 'servers/public.php',
 
   // alerts
   'alerts-general' => 'alerts/general.php',
@@ -34,6 +35,7 @@ $contentFile = __DIR__ . '/pages/' . $routes[$page];
 // menu state
 $isServers = str_starts_with($page, 'server');
 $isAlerts = str_starts_with($page, 'alerts');
+
 ?>
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="dark">
@@ -209,6 +211,7 @@ $isAlerts = str_starts_with($page, 'alerts');
       </a>
 
     </aside>
+
 
     <!-- CONTENT -->
     <main class="flex-grow-1 p-4">
