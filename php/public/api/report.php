@@ -292,6 +292,152 @@ $metricsRepo->insert([
 ]);
 
 /* =========================================================
+   SERVICE ISSUES (dedupe + compression)
+   - payload field: service_issues: [ { service, new_unique_logs, ... } ]
+   - Store unique messages ONCE in service_error_fingerprints (by short-hash)
+   - Store per-server occurrence row (upsert)
+   - Store daily rollup row (upsert)  -> "compression" for 1-year logs
+========================================================= */
+try {
+  $serviceIssues = $payload['service_issues'] ?? null;
+  if (!is_array($serviceIssues) || empty($serviceIssues)) {
+    // nothing to do
+  } else {
+    // Prepared statements (fast)
+    $stmtUpsertFingerprint = $db->prepare("
+      INSERT INTO service_error_fingerprints
+        (hash, normalized_message, sample_message, first_seen, last_seen, seen_total)
+      VALUES
+        (:hash, :normalized, :sample, strftime('%s','now'), strftime('%s','now'), 1)
+      ON CONFLICT(hash) DO UPDATE SET
+        last_seen  = strftime('%s','now'),
+        seen_total = seen_total + 1
+    ");
+
+    $stmtFindFingerprintId = $db->prepare("
+      SELECT id FROM service_error_fingerprints
+      WHERE hash = :hash
+      LIMIT 1
+    ");
+
+    $stmtUpsertOccurrence = $db->prepare("
+      INSERT INTO service_error_occurrences (
+        server_id, fingerprint_id,
+        service, priority,
+        active_state, sub_state, exec_status, restarts,
+        first_seen, last_seen, hit_count,
+        last_payload_json
+      ) VALUES (
+        :server_id, :fingerprint_id,
+        :service, :priority,
+        :active_state, :sub_state, :exec_status, :restarts,
+        strftime('%s','now'), strftime('%s','now'), 1,
+        :payload
+      )
+      ON CONFLICT(server_id, service, fingerprint_id) DO UPDATE SET
+        last_seen        = strftime('%s','now'),
+        hit_count        = hit_count + 1,
+        priority         = excluded.priority,
+        active_state     = excluded.active_state,
+        sub_state        = excluded.sub_state,
+        exec_status      = excluded.exec_status,
+        restarts         = excluded.restarts,
+        last_payload_json= excluded.last_payload_json
+    ");
+
+    $stmtUpsertDaily = $db->prepare("
+      INSERT INTO service_error_daily (
+        server_id, fingerprint_id, service, day,
+        hit_count, first_seen, last_seen
+      ) VALUES (
+        :server_id, :fingerprint_id, :service, :day,
+        1, strftime('%s','now'), strftime('%s','now')
+      )
+      ON CONFLICT(server_id, service, fingerprint_id, day) DO UPDATE SET
+        last_seen = strftime('%s','now'),
+        hit_count = hit_count + 1
+    ");
+
+    $day = (int) date('Ymd');
+
+    foreach ($serviceIssues as $issue) {
+      if (!is_array($issue))
+        continue;
+
+      $service = trim((string) ($issue['service'] ?? ''));
+      if ($service === '')
+        continue;
+
+      // agent sends normalized unique logs in one string (newline separated)
+      $logsRaw = (string) ($issue['new_unique_logs'] ?? '');
+      if ($logsRaw === '') {
+        // still allow "failed/restarting with no logs" if you want,
+        // but there is nothing to fingerprint
+        continue;
+      }
+
+      // split lines, enforce uniqueness just in case
+      $lines = preg_split("/\r\n|\n|\r/", $logsRaw) ?: [];
+      $lines = array_values(array_filter(array_map('trim', $lines), fn($x) => $x !== ''));
+      if (!$lines)
+        continue;
+
+      $lines = array_values(array_unique($lines));
+
+      // store a compact payload snapshot for debug/UI
+      $payloadJson = json_encode($issue, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+      if ($payloadJson === false)
+        $payloadJson = null;
+
+      foreach ($lines as $normalizedMsg) {
+        // short-hash (16 hex chars) for space savings
+        // input must match your agent logic: sha256(unit|normalized_msg)
+        $full = hash('sha256', $service . '|' . $normalizedMsg);
+        $shortHash = substr($full, 0, 16);
+
+        // Upsert fingerprint
+        $stmtUpsertFingerprint->execute([
+          ':hash' => $shortHash,
+          ':normalized' => $normalizedMsg,
+          ':sample' => $normalizedMsg,
+        ]);
+
+        // resolve fingerprint_id
+        $stmtFindFingerprintId->execute([':hash' => $shortHash]);
+        $fingerprintId = (int) ($stmtFindFingerprintId->fetchColumn() ?: 0);
+        if ($fingerprintId <= 0)
+          continue;
+
+        // Upsert per-server occurrence
+        $stmtUpsertOccurrence->execute([
+          ':server_id' => $serverId,
+          ':fingerprint_id' => $fingerprintId,
+          ':service' => $service,
+          ':priority' => (string) ($payload['priority'] ?? $issue['priority'] ?? ''),
+
+          ':active_state' => (string) ($issue['active_state'] ?? ''),
+          ':sub_state' => (string) ($issue['sub_state'] ?? ''),
+          ':exec_status' => (string) ($issue['exec_status'] ?? ''),
+          ':restarts' => (string) ($issue['restarts'] ?? ''),
+
+          ':payload' => $payloadJson,
+        ]);
+
+        // Daily rollup (compression)
+        $stmtUpsertDaily->execute([
+          ':server_id' => $serverId,
+          ':fingerprint_id' => $fingerprintId,
+          ':service' => $service,
+          ':day' => $day,
+        ]);
+      }
+    }
+  }
+} catch (Throwable $e) {
+  // Do not break metrics reporting if tables/migrations are missing or any edge case happens
+}
+
+/* =========================================================
    NORMALIZE METRICS FOR ALERTS
 ========================================================= */
 $alertMetrics = [
