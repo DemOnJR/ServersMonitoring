@@ -211,22 +211,22 @@ $isAlerts = str_starts_with($page, 'alerts');
           </div>
         <?php endif; ?>
 
-        </nav>
+      </nav>
 
-        <!-- PUSHES BUTTONS TO BOTTOM -->
-       <d iv class="mt-auto">
+      <!-- PUSHES BUTTONS TO BOTTOM -->
+      <div class="mt-auto">
 
-          <hr>
+        <hr>
 
-           <a  href="/docs" class="btn btn-sm btn-outline-secondary w-100 mb-2">
-            <i class="fa-solid fa-book me-1"></i>
+        <a href="/docs" class="btn btn-sm btn-outline-secondary w-100 mb-2">
+          <i class="fa-solid fa-book me-1"></i>
           Docs
-          </a>
+        </a>
 
-           <a  href="/logout.php" class="btn btn-sm btn-outline-secondary w-100">
-            <i class="fa-solid fa-right-from-bracket me-1"></i>
+        <a href="/logout.php" class="btn btn-sm btn-outline-secondary w-100">
+          <i class="fa-solid fa-right-from-bracket me-1"></i>
           Logout
-          </a>
+        </a>
 
       </div>
 
