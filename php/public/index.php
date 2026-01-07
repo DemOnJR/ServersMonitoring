@@ -18,6 +18,9 @@ $routes = [
 
   'public' => 'servers/public.php',
 
+  'services' => 'services/services.php',
+  'service' => 'services/service.php',
+
   // alerts
   'alerts-general' => 'alerts/general.php',
   'alerts-rules' => 'alerts/rules.php',
@@ -35,6 +38,7 @@ $contentFile = __DIR__ . '/pages/' . $routes[$page];
 
 // menu state
 $isServers = str_starts_with($page, 'server');
+$isServices = str_starts_with($page, 'services');
 $isAlerts = str_starts_with($page, 'alerts');
 
 ?>
@@ -181,6 +185,11 @@ $isAlerts = str_starts_with($page, 'alerts');
         <a class="nav-link <?= $isServers ? 'active' : '' ?>" href="/?page=servers">
           <i class="fa-solid fa-server"></i>
           Servers
+        </a>
+
+        <a class="nav-link <?= $isServices ? 'active' : '' ?>" href="/?page=services">
+          <i class="fa-solid fa-microchip"></i>
+          Services
         </a>
 
         <a class="nav-link <?= $isAlerts ? 'active' : '' ?>" href="/?page=alerts-general">

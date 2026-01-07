@@ -7,7 +7,7 @@ use Auth\Guard;
 use Server\ServerRepository;
 use Server\ServerService;
 
-// Only logged-in users
+// Reject unauthenticated requests early to avoid leaking endpoint behavior.
 Guard::protect();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -15,18 +15,21 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-$action = $_GET['action'] ?? '';
+$action = (string) ($_GET['action'] ?? '');
 
-$repo    = new ServerRepository($db);
+$repo = new ServerRepository($db);
 $service = new ServerService($repo);
 
 /**
- * SAVE DISPLAY NAME
+ * Server AJAX actions handler.
+ *
+ * Routes validated POST actions to application services and returns JSON responses.
  */
+
 if ($action === 'saveName') {
 
-    $id   = (int)($_POST['id'] ?? 0);
-    $name = $_POST['name'] ?? '';
+    $id = (int) ($_POST['id'] ?? 0);
+    $name = (string) ($_POST['name'] ?? '');
 
     try {
         $service->rename($id, $name);
@@ -35,6 +38,8 @@ if ($action === 'saveName') {
         echo json_encode(['status' => 'ok']);
     } catch (Throwable $e) {
         http_response_code(400);
+
+        header('Content-Type: application/json');
         echo json_encode(['error' => $e->getMessage()]);
     }
 

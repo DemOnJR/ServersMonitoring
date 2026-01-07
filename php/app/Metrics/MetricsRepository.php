@@ -4,30 +4,38 @@ declare(strict_types=1);
 namespace Metrics;
 
 use PDO;
+use PDOException;
 
+/**
+ * Repository responsible for persisting and retrieving metric snapshots.
+ *
+ * Stores only dynamic metric values; static totals are expected to live elsewhere
+ * (e.g. in a server_resources table).
+ */
 class MetricsRepository
 {
+  /**
+   * MetricsRepository constructor.
+   *
+   * @param PDO $db Database connection.
+   */
   public function __construct(
     private PDO $db
   ) {
   }
 
   /**
-   * Insert a metrics snapshot
-   * Used by api/report.php
+   * Inserts a metric snapshot.
    *
-   * IMPORTANT:
-   * - This table stores ONLY dynamic values
-   * - Totals live in server_resources
+   * @param array<string, mixed> $data Raw metric payload from the agent/API.
    *
-   * New optional columns supported:
-   * - cpu_load_5, cpu_load_15
-   * - public_ip
-   * - filesystems_json
+   * @return void
+   *
+   * @throws PDOException When the insert fails.
    */
   public function insert(array $data): void
   {
-    // Normalize optional values + defaults
+    // Normalize optional fields to keep inserts stable across agent versions.
     $data = array_merge([
       'cpu_load_5' => null,
       'cpu_load_15' => null,
@@ -44,7 +52,6 @@ class MetricsRepository
       'uptime' => null,
     ], $data);
 
-    // If agent sent arrays, store as JSON text
     if (is_array($data['filesystems_json'])) {
       $data['filesystems_json'] = json_encode($data['filesystems_json']);
     }
@@ -115,8 +122,13 @@ class MetricsRepository
   }
 
   /**
-   * Fetch today's metrics (00:00 -> now)
-   * Used by server.php
+   * Returns metric snapshots from the start of today until now.
+   *
+   * @param int $serverId Server id.
+   *
+   * @return array<int, array<string, mixed>> Metric rows for today.
+   *
+   * @throws PDOException When the query fails.
    */
   public function today(int $serverId): array
   {
@@ -131,11 +143,20 @@ class MetricsRepository
     ");
     $stmt->execute([$serverId, $start]);
 
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    /** @var array<int, array<string, mixed>> $rows */
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    return $rows;
   }
 
   /**
-   * Fetch latest metric snapshot
+   * Returns the latest metric snapshot for a server.
+   *
+   * @param int $serverId Server id.
+   *
+   * @return array<string, mixed>|null Latest row or null if none exists.
+   *
+   * @throws PDOException When the query fails.
    */
   public function latest(int $serverId): ?array
   {
@@ -148,84 +169,20 @@ class MetricsRepository
     ");
     $stmt->execute([$serverId]);
 
-    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    /** @var array<string, mixed>|false $row */
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $row ?: null;
   }
 
   /**
-   * Fetch last N metric snapshots (for logs tables)
-   */
-  public function latestN(int $serverId, int $limit = 1440): array
-  {
-    $limit = max(1, min($limit, 20000)); // safety cap
-
-    $stmt = $this->db->prepare("
-      SELECT *
-      FROM metrics
-      WHERE server_id = ?
-      ORDER BY created_at DESC
-      LIMIT {$limit}
-    ");
-    $stmt->execute([$serverId]);
-
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-  }
-
-  /**
-   * Fetch metrics in a time range
-   */
-  public function range(int $serverId, int $from, int $to): array
-  {
-    $stmt = $this->db->prepare("
-      SELECT *
-      FROM metrics
-      WHERE server_id = ?
-        AND created_at BETWEEN ? AND ?
-      ORDER BY created_at ASC
-    ");
-    $stmt->execute([$serverId, $from, $to]);
-
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
-  }
-
-  /**
-   * Delete metrics older than X days (optional maintenance)
-   * Returns number of rows deleted
-   */
-  public function pruneOlderThanDays(int $days): int
-  {
-    $days = max(1, $days);
-    $cutoff = time() - ($days * 86400);
-
-    $stmt = $this->db->prepare("
-      DELETE FROM metrics
-      WHERE created_at < ?
-    ");
-    $stmt->execute([$cutoff]);
-
-    return $stmt->rowCount();
-  }
-
-  /**
-   * Helper: today's start timestamp (server-local time)
+   * Returns today's start timestamp in server-local time.
+   *
+   * @return int Timestamp for today's 00:00:00.
    */
   public function todayStartTimestamp(): int
   {
     return strtotime(date('Y-m-d 00:00:00'));
   }
 
-  /**
-   * Optional helper: check if a column exists (useful if you want backward compatibility)
-   */
-  public function hasColumn(string $table, string $column): bool
-  {
-    $stmt = $this->db->prepare("PRAGMA table_info($table)");
-    $stmt->execute();
-    $cols = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($cols as $c) {
-      if (($c['name'] ?? null) === $column)
-        return true;
-    }
-    return false;
-  }
 }

@@ -3,27 +3,39 @@ declare(strict_types=1);
 
 namespace Utils;
 
+/**
+ * Provides masking helpers for public-safe display of sensitive identifiers.
+ *
+ * Includes masking for IP addresses and hostnames to reduce data exposure
+ * while preserving enough context for end users.
+ */
 final class Mask
 {
-    private function __construct() {}
+    /**
+     * Prevents instantiation; this class exposes only static helpers.
+     */
+    private function __construct()
+    {
+    }
 
     /**
-     * Mask IP address for public display
+     * Masks an IP address for public display.
      *
-     * IPv4: 192.168.1.12 ? 192.***.***.12
-     * IPv6: 2001:db8::1 ? 2001:****:****::1
+     * @param string $ip IP address (IPv4 or IPv6).
+     *
+     * @return string Masked IP string.
      */
     public static function ip(string $ip): string
     {
-        // IPv4
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
             $p = explode('.', $ip);
+
             return sprintf('%s.***.***.%s', $p[0], $p[3]);
         }
 
-        // IPv6
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
             $p = explode(':', $ip);
+
             return $p[0] . ':****:****::' . end($p);
         }
 
@@ -31,10 +43,11 @@ final class Mask
     }
 
     /**
-     * Mask hostname while keeping provider domain visible
+     * Masks a hostname while keeping the provider domain visible.
      *
-     * vmi2557073.contaboserver.net ? vmi****.contaboserver.net
-     * server-123.myhost.com ? server-***.myhost.com
+     * @param string $hostname Hostname (expected to include a domain).
+     *
+     * @return string Masked hostname string.
      */
     public static function hostname(string $hostname): string
     {

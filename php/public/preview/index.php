@@ -1,8 +1,11 @@
 <?php
+declare(strict_types=1);
+
 require_once __DIR__ . '/../../App/Bootstrap.php';
 
 use Metrics\MetricsRepository;
 use Metrics\MetricsService;
+use Preview\PublicPreviewRepository;
 use Utils\Formatter;
 use Utils\Mask;
 use Utils\ChartSeries;
@@ -17,21 +20,9 @@ if ($slug === '') {
   exit('Missing slug');
 }
 
-// Load public page config + server
-$stmt = $db->prepare("
-  SELECT
-    p.server_id, p.enabled, p.slug, p.is_private, p.password_hash,
-    p.show_cpu, p.show_ram, p.show_disk, p.show_network, p.show_uptime,
+$previewRepo = new PublicPreviewRepository($db);
 
-    s.id, s.hostname, s.display_name, s.ip, CAST(s.last_seen AS INTEGER) AS last_seen
-  FROM server_public_pages p
-  INNER JOIN servers s ON s.id = p.server_id
-  WHERE p.slug = ?
-  LIMIT 1
-");
-$stmt->execute([$slug]);
-$page = $stmt->fetch(PDO::FETCH_ASSOC);
-
+$page = $previewRepo->findPageBySlug($slug);
 if (!$page || (int) $page['enabled'] !== 1) {
   http_response_code(404);
   exit('Page not found');
@@ -44,7 +35,7 @@ $name = trim((string) ($page['display_name'] ?? '')) ?: (string) ($page['hostnam
 $needsPass = ((int) $page['is_private'] === 1) && !empty($page['password_hash']);
 $accessKey = 'public_page_access_' . $serverId;
 
-// PUBLIC LOGOUT: remove only access for this server public page
+// Public logout should only remove access for this specific server page
 if (!empty($_GET['logout'])) {
   unset($_SESSION[$accessKey]);
   header('Location: /preview/?slug=' . urlencode($slug));
@@ -55,8 +46,10 @@ $hasAccess = !empty($_SESSION[$accessKey]);
 $err = null;
 
 if ($needsPass && !$hasAccess) {
+  // Only accept unlock via POST; keep GET for rendering/login screen
   if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $pass = (string) ($_POST['password'] ?? '');
+
     if ($pass !== '' && password_verify($pass, (string) $page['password_hash'])) {
       $_SESSION[$accessKey] = true;
       $hasAccess = true;
@@ -121,16 +114,17 @@ $metricsSvc = new MetricsService($metricsRepo);
 $metricsToday = $metricsSvc->today($serverId);
 $latest = $metricsSvc->latest($serverId);
 
-$resourcesStmt = $db->prepare("SELECT * FROM server_resources WHERE server_id = ? LIMIT 1");
-$resourcesStmt->execute([$serverId]);
-$resources = $resourcesStmt->fetch(PDO::FETCH_ASSOC) ?: ['ram_total' => 0, 'disk_total' => 0];
+// Resources (repo)
+$resources = $previewRepo->getResourcesByServerId($serverId);
 
-$cpuRamSeries = $metricsSvc->cpuRamSeries($metricsToday, $resources);
-$netSeries = $metricsSvc->networkSeries($metricsToday);
-
-/* -----------------------------
-   EXPORT (CSV/TXT)
------------------------------ */
+/**
+ * Export metrics rows as CSV/TXT.
+ *
+ * @param array<int, array<string, mixed>> $rows
+ * @param string $format
+ * @param string $filenameBase
+ * @return void
+ */
 function exportRows(array $rows, string $format, string $filenameBase): void
 {
   $format = strtolower($format);
@@ -139,9 +133,8 @@ function exportRows(array $rows, string $format, string $filenameBase): void
     exit('Invalid export format');
   }
 
-  $deny = [
-    'public_ip',
-  ];
+  // Avoid exporting potentially sensitive fields
+  $deny = ['public_ip'];
 
   $rows = array_values($rows);
   if (!$rows) {
@@ -155,8 +148,9 @@ function exportRows(array $rows, string $format, string $filenameBase): void
     foreach ($rows as $r) {
       $r = (array) $r;
       $newRow = [];
-      foreach ($headers as $h)
+      foreach ($headers as $h) {
         $newRow[$h] = $r[$h] ?? '';
+      }
       $filtered[] = $newRow;
     }
     $rows = $filtered;
@@ -175,8 +169,9 @@ function exportRows(array $rows, string $format, string $filenameBase): void
     foreach ($rows as $r) {
       $r = (array) $r;
       $line = [];
-      foreach ($headers as $h)
+      foreach ($headers as $h) {
         $line[] = $r[$h] ?? '';
+      }
       fputcsv($out, $line, ',', '"', '\\');
     }
   } else {
@@ -184,8 +179,9 @@ function exportRows(array $rows, string $format, string $filenameBase): void
     foreach ($rows as $r) {
       $r = (array) $r;
       $line = [];
-      foreach ($headers as $h)
+      foreach ($headers as $h) {
         $line[] = (string) ($r[$h] ?? '');
+      }
       fwrite($out, implode("\t", $line) . "\n");
     }
   }
@@ -199,6 +195,7 @@ if ($export !== '') {
   $rows = is_array($metricsToday) ? $metricsToday : [];
   $base = 'server-' . $serverId . '-metrics-' . date('Y-m-d');
 
+  // If there are no "today" rows but we have latest -> export only latest
   if (!$rows && $latest) {
     $rows = [$latest];
     $base = 'server-' . $serverId . '-latest-' . date('Y-m-d_H-i');
@@ -208,13 +205,37 @@ if ($export !== '') {
 }
 
 /* -----------------------------
-   NORMALIZE SERIES (CPU/RAM + NETWORK)
+   BUILD SERIES (MATCH server.php)
 ----------------------------- */
-$cpuRamSeries = ChartSeries::percent($cpuRamSeries, ['cpu', 'ram'], 2);      // clamp 0..100, round, dedupe labels
-$cpuRamSeries = ChartSeries::downsample($cpuRamSeries, ['cpu', 'ram'], 260); // reduce points
+$cpuRamRaw = $metricsSvc->cpuRamSeries($metricsToday, $resources);
+$cpuRamSeries = ChartSeries::downsample(
+  ChartSeries::percent($cpuRamRaw, ['cpu', 'ram'], 2, true),
+  ['cpu', 'ram'],
+  240
+);
 
-$netSeries = ChartSeries::network($netSeries, ['rx', 'tx'], 2);              // clamp min 0, no max, round, dedupe labels
-$netSeries = ChartSeries::downsample($netSeries, ['rx', 'tx'], 260);
+$netRaw = $metricsSvc->networkSeries($metricsToday);
+$netSeries = ChartSeries::downsample(
+  ChartSeries::network($netRaw, ['rx', 'tx'], 2, true),
+  ['rx', 'tx'],
+  240
+);
+
+$diskRaw = [
+  'labels' => $cpuRamRaw['labels'] ?? [],
+  'disk' => array_map(
+    static fn($m) => (!empty($resources['disk_total']) && (float) $resources['disk_total'] > 0)
+    ? (((float) ($m['disk_used'] ?? 0) / (float) $resources['disk_total']) * 100.0)
+    : null,
+    is_array($metricsToday) ? $metricsToday : []
+  ),
+];
+
+$diskSeries = ChartSeries::downsample(
+  ChartSeries::percent($diskRaw, ['disk'], 2, true),
+  ['disk'],
+  240
+);
 
 /* -----------------------------
    UI HELPERS
@@ -223,6 +244,7 @@ function pctVal(float $v): int
 {
   return (int) round(min(max($v, 0), 100));
 }
+
 function ringColor(int $pct): string
 {
   return match (true) {
@@ -240,14 +262,16 @@ $showUptime = (int) $page['show_uptime'] === 1;
 
 $lastSeen = (int) ($page['last_seen'] ?? 0);
 $isOnline = $lastSeen > 0 && (time() - $lastSeen) <= 120;
+
 $showLogout = $needsPass && $hasAccess;
 
-// disk percent
+// Disk percent (card)
 $diskPct = 0;
 if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])) {
   $diskPct = pctVal(((float) $latest['disk_used'] / (float) $resources['disk_total']) * 100);
 }
 ?>
+
 <!doctype html>
 <html lang="en" data-bs-theme="dark">
 
@@ -330,7 +354,7 @@ if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])
 
       <div class="row g-3 mb-3">
         <?php if ($showCpu): ?>
-          <?php $cpuPct = pctVal(((float) $latest['cpu_load']) * 100); ?>
+          <?php $cpuPct = pctVal(((float) ($latest['cpu_load'] ?? 0)) * 100); ?>
           <div class="col-6 col-md-3 col-xl-2">
             <div class="card h-100 shadow-soft">
               <div class="card-body">
@@ -352,7 +376,7 @@ if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])
         <?php if ($showRam): ?>
           <?php
           $ramPct = !empty($resources['ram_total'])
-            ? pctVal(((float) $latest['ram_used'] / (float) $resources['ram_total']) * 100)
+            ? pctVal(((float) ($latest['ram_used'] ?? 0) / (float) $resources['ram_total']) * 100)
             : 0;
           ?>
           <div class="col-6 col-md-3 col-xl-2">
@@ -361,8 +385,8 @@ if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])
                 <div class="text-muted small">RAM</div>
                 <div class="fs-4 fw-semibold"><?= $ramPct ?>%</div>
                 <div class="small text-muted">
-                  <?= Formatter::bytesMB((float) $latest['ram_used']) ?> /
-                  <?= Formatter::bytesMB((float) $resources['ram_total']) ?>
+                  <?= Formatter::bytesMB((int) ($latest['ram_used'] ?? 0)) ?> /
+                  <?= Formatter::bytesMB((int) ($resources['ram_total'] ?? 0)) ?>
                 </div>
                 <div class="progress progress-xs mt-3">
                   <div class="progress-bar <?= ringColor($ramPct) ?>" style="width:<?= $ramPct ?>%"></div>
@@ -405,7 +429,7 @@ if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])
             <div class="card h-100 shadow-soft">
               <div class="card-body">
                 <div class="text-muted small">Uptime</div>
-                <div class="fs-5 fw-semibold"><?= htmlspecialchars((string) $latest['uptime']) ?></div>
+                <div class="fs-5 fw-semibold"><?= htmlspecialchars((string) ($latest['uptime'] ?? '')) ?></div>
               </div>
             </div>
           </div>
@@ -442,83 +466,170 @@ if ($showDisk && !empty($resources['disk_total']) && isset($latest['disk_used'])
         <?php endif; ?>
       </div>
 
-      <?php if ($showCpu || $showRam): ?>
-        <script>
-          new Chart(document.getElementById('cpuRamChart'), {
-            type: 'line',
-            data: {
-              labels: <?= ChartSeries::j($cpuRamSeries['labels']) ?>,
-              datasets: [
-                <?php if ($showCpu): ?>
-                      { label: 'CPU %', data: <?= ChartSeries::j($cpuRamSeries['cpu']) ?>, tension: .35, pointRadius: 0, borderWidth: 2 },
-                <?php endif; ?>
-                    <?php if ($showRam): ?>
-                      { label: 'RAM %', data: <?= ChartSeries::j($cpuRamSeries['ram']) ?>, tension: .35, pointRadius: 0, borderWidth: 2 },
-                <?php endif; ?>
-              ]
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              interaction: { mode: 'index', intersect: false },
-              plugins: {
-                legend: { position: 'top', labels: { boxWidth: 12, boxHeight: 12 } },
-                tooltip: {
-                  callbacks: {
-                    label: (ctx) => `${ctx.dataset.label}: ${Number(ctx.parsed.y ?? 0).toFixed(2)}%`
-                  }
-                }
-              },
-              scales: {
-                x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
-                y: {
-                  min: 0, max: 100,
-                  ticks: { callback: (v) => `${Number(v).toFixed(0)}%` },
-                  grid: { drawBorder: false }
-                }
-              }
-            }
-          });
-        </script>
+      <?php if ($showDisk): ?>
+        <div class="row g-3 mt-1">
+          <div class="col-12">
+            <div class="card shadow-soft h-100">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Disk</strong>
+                <span class="text-muted small">Today</span>
+              </div>
+              <div class="card-body" style="height:260px">
+                <canvas id="diskChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
       <?php endif; ?>
 
-      <?php if ($showNetwork): ?>
-        <script>
-          new Chart(document.getElementById('netChart'), {
-            type: 'line',
-            data: {
-              labels: <?= ChartSeries::j($netSeries['labels']) ?>,
-              datasets: [
-                { label: 'Download', data: <?= ChartSeries::j($netSeries['rx']) ?>, tension: .35, pointRadius: 0, borderWidth: 2 },
-                { label: 'Upload', data: <?= ChartSeries::j($netSeries['tx']) ?>, tension: .35, pointRadius: 0, borderWidth: 2 }
-              ]
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              interaction: { mode: 'index', intersect: false },
-              plugins: {
-                legend: { position: 'top', labels: { boxWidth: 12, boxHeight: 12 } },
-                tooltip: {
-                  callbacks: {
-                    label: (ctx) => `${ctx.dataset.label}: ${Number(ctx.parsed.y ?? 0).toFixed(2)}`
-                  }
+      <script>
+        (function () {
+          function makeLineChart(canvasId, labels, datasets, opts) {
+            const el = document.getElementById(canvasId);
+            if (!el || !window.Chart) return;
+
+            function legendLabels(chart) {
+              const gen =
+                (Chart?.overrides?.line?.plugins?.legend?.labels?.generateLabels) ||
+                (Chart?.defaults?.plugins?.legend?.labels?.generateLabels);
+
+              const items = typeof gen === 'function'
+                ? gen(chart)
+                : (chart.legend && chart.legend.legendItems ? chart.legend.legendItems : []);
+
+              return items.map((it) => {
+                const ds = chart.data.datasets[it.datasetIndex] || {};
+                const c = ds._legendColor || ds._baseColor || ds.borderColor;
+                if (typeof c === 'string') {
+                  it.strokeStyle = c;
+                  it.fillStyle = c;
                 }
-              },
-              scales: {
-                x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
-                y: {
-                  beginAtZero: true,
-                  grid: { drawBorder: false },
-                  ticks: {
-                    callback: (v) => Number(v).toFixed(0)
-                  }
-                }
-              }
+                return it;
+              });
             }
-          });
-        </script>
-      <?php endif; ?>
+
+            new Chart(el, {
+              type: 'line',
+              data: { labels, datasets },
+              options: Object.assign({
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                  tooltip: { enabled: true },
+                  legend: {
+                    display: true,
+                    labels: { generateLabels: (chart) => legendLabels(chart) }
+                  }
+                },
+                layout: { padding: { top: 10 } }
+              }, opts || {})
+            });
+          }
+
+          const CLIP_TOP = { top: 10, left: 0, right: 0, bottom: 0 };
+
+          function dangerGradient(ctx, chartArea, baseColor) {
+            const g = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+            g.addColorStop(0.00, baseColor);
+            g.addColorStop(0.65, '#ffc107');
+            g.addColorStop(0.85, '#fd7e14');
+            g.addColorStop(1.00, '#dc3545');
+            return g;
+          }
+
+          function dangerBorder(baseColor) {
+            return (ctx) => {
+              const chart = ctx.chart;
+              if (!chart || !chart.chartArea) return baseColor;
+              return dangerGradient(chart.ctx, chart.chartArea, baseColor);
+            };
+          }
+
+          makeLineChart('cpuRamChart',
+            <?= ChartSeries::j($cpuRamSeries['labels'] ?? []) ?>,
+            [
+              <?php if ($showCpu): ?>
+                  {
+                  label: 'CPU',
+                  data: <?= ChartSeries::j($cpuRamSeries['cpu'] ?? []) ?>,
+                  tension: .3,
+                  pointRadius: 0,
+                  borderWidth: 2,
+                  clip: CLIP_TOP,
+                  _legendColor: '#0d6efd',
+                  borderColor: dangerBorder('#0d6efd')
+                },
+              <?php endif; ?>
+                <?php if ($showRam): ?>
+                  {
+                  label: 'RAM',
+                  data: <?= ChartSeries::j($cpuRamSeries['ram'] ?? []) ?>,
+                  tension: .3,
+                  pointRadius: 0,
+                  borderWidth: 2,
+                  clip: CLIP_TOP,
+                  _legendColor: '#198754',
+                  borderColor: dangerBorder('#198754')
+                }
+                <?php endif; ?>
+            ],
+            {
+              scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }
+            }
+          );
+
+          makeLineChart('netChart',
+            <?= ChartSeries::j($netSeries['labels'] ?? []) ?>,
+            [
+              {
+                label: 'Download',
+                data: <?= ChartSeries::j($netSeries['rx'] ?? []) ?>,
+                tension: .3,
+                pointRadius: 0,
+                borderWidth: 2,
+                clip: CLIP_TOP,
+                _legendColor: '#0dcaf0',
+                borderColor: dangerBorder('#0dcaf0')
+              },
+              {
+                label: 'Upload',
+                data: <?= ChartSeries::j($netSeries['tx'] ?? []) ?>,
+                tension: .3,
+                pointRadius: 0,
+                borderWidth: 2,
+                clip: CLIP_TOP,
+                _legendColor: '#6610f2',
+                borderColor: dangerBorder('#6610f2')
+              }
+            ],
+            {
+              scales: { y: { beginAtZero: true, title: { display: true, text: 'MB/min' } } }
+            }
+          );
+
+          <?php if ($showDisk): ?>
+            makeLineChart('diskChart',
+              <?= ChartSeries::j($diskSeries['labels'] ?? []) ?>,
+              [
+                {
+                  label: 'Disk Used',
+                  data: <?= ChartSeries::j($diskSeries['disk'] ?? []) ?>,
+                  tension: .3,
+                  pointRadius: 0,
+                  borderWidth: 2,
+                  clip: CLIP_TOP,
+                  _legendColor: '#fd7e14',
+                  borderColor: dangerBorder('#fd7e14')
+                }
+              ],
+              {
+                scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }
+              }
+            );
+          <?php endif; ?>
+        })();
+      </script>
 
     <?php endif; ?>
 

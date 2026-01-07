@@ -3,41 +3,58 @@ declare(strict_types=1);
 
 namespace Metrics;
 
+/**
+ * Provides metric retrieval and chart-ready transformations.
+ *
+ * Acts as an application-layer service over MetricsRepository,
+ * keeping controllers thin and centralizing series/grid computations.
+ */
 class MetricsService
 {
+  /**
+   * MetricsService constructor.
+   *
+   * @param MetricsRepository $repo Metrics repository.
+   */
   public function __construct(
     private MetricsRepository $repo
   ) {
   }
 
-  // ==================================================
-  // TODAY METRICS (00:00 ? NOW)
-  // ==================================================
+  /**
+   * Returns today's metrics for a server (00:00 -> now).
+   *
+   * @param int $serverId Server id.
+   *
+   * @return array<int, array<string, mixed>> Metric rows for today.
+   */
   public function today(int $serverId): array
   {
     return $this->repo->today($serverId);
   }
 
-  // ==================================================
-  // LATEST SNAPSHOT
-  // ==================================================
+  /**
+   * Returns the latest metric snapshot for a server.
+   *
+   * @param int $serverId Server id.
+   *
+   * @return array<string, mixed>|null Latest snapshot or null if none exists.
+   */
   public function latest(int $serverId): ?array
   {
     return $this->repo->latest($serverId);
   }
 
-  // ==================================================
-  // METRICS IN RANGE
-  // ==================================================
-  public function range(int $serverId, int $from, int $to): array
-  {
-    return $this->repo->range($serverId, $from, $to);
-  }
-
-  // ==================================================
-  // CPU & RAM SERIES (CHART READY)
-  // Requires server_resources totals
-  // ==================================================
+  /**
+   * Builds CPU and RAM percentage series for charts.
+   *
+   * Requires RAM totals from server resources to compute RAM %.
+   *
+   * @param array<int, array<string, mixed>> $metrics Metric rows ordered by time.
+   * @param array<string, int|string|float|null> $resources Server resources (expects ram_total).
+   *
+   * @return array{labels: array<int, string>, cpu: array<int, float>, ram: array<int, float>}
+   */
   public function cpuRamSeries(array $metrics, array $resources): array
   {
     $labels = [];
@@ -49,13 +66,11 @@ class MetricsService
     foreach ($metrics as $row) {
       $labels[] = date('H:i', (int) $row['created_at']);
 
-      // CPU %
-      $cpu[] = min(max($row['cpu_load'] * 100, 0), 100);
+      $cpu[] = min(max(((float) $row['cpu_load']) * 100, 0), 100);
 
-      // RAM %
       $ram[] = $ramTotal > 0
-        ? min(max(($row['ram_used'] / $ramTotal) * 100, 0), 100)
-        : 0;
+        ? min(max((((int) $row['ram_used']) / $ramTotal) * 100, 0), 100)
+        : 0.0;
     }
 
     return [
@@ -65,9 +80,16 @@ class MetricsService
     ];
   }
 
-  // ==================================================
-  // NETWORK SERIES (MB / INTERVAL)
-  // ==================================================
+  /**
+   * Builds RX/TX network series in MB per interval for charts.
+   *
+   * Uses deltas between snapshots; negative deltas are clamped to 0
+   * to handle counter resets or agent restarts.
+   *
+   * @param array<int, array<string, mixed>> $metrics Metric rows ordered by time.
+   *
+   * @return array{labels: array<int, string>, rx: array<int, float>, tx: array<int, float>}
+   */
   public function networkSeries(array $metrics): array
   {
     $labels = [];
@@ -80,12 +102,12 @@ class MetricsService
     foreach ($metrics as $row) {
       $labels[] = date('H:i', (int) $row['created_at']);
 
-      if ($prevRx === null) {
-        $rx[] = 0;
-        $tx[] = 0;
+      if ($prevRx === null || $prevTx === null) {
+        $rx[] = 0.0;
+        $tx[] = 0.0;
       } else {
-        $rx[] = max(0, ($row['rx_bytes'] - $prevRx) / 1024 / 1024);
-        $tx[] = max(0, ($row['tx_bytes'] - $prevTx) / 1024 / 1024);
+        $rx[] = max(0.0, (((int) $row['rx_bytes']) - (int) $prevRx) / 1024 / 1024);
+        $tx[] = max(0.0, (((int) $row['tx_bytes']) - (int) $prevTx) / 1024 / 1024);
       }
 
       $prevRx = $row['rx_bytes'];
@@ -99,9 +121,16 @@ class MetricsService
     ];
   }
 
-  // ==================================================
-  // UPTIME GRID (24h × 60m)
-  // ==================================================
+  /**
+   * Builds a 24h×60m uptime grid for a heatmap-style UI.
+   *
+   * Marks future minutes explicitly to avoid misleading "offline" states
+   * for time that has not happened yet.
+   *
+   * @param array<int, array<string, mixed>> $metrics Metric rows for today.
+   *
+   * @return array<int, array<int, string>> Grid with values: online|offline|future.
+   */
   public function uptimeGrid(array $metrics): array
   {
     $grid = [];
@@ -109,7 +138,6 @@ class MetricsService
     $nowH = (int) date('H');
     $nowM = (int) date('i');
 
-    // init grid
     for ($h = 0; $h < 24; $h++) {
       for ($m = 0; $m < 60; $m++) {
         $grid[$h][$m] =
@@ -119,7 +147,6 @@ class MetricsService
       }
     }
 
-    // mark online minutes
     foreach ($metrics as $row) {
       $ts = (int) $row['created_at'];
       $h = (int) date('H', $ts);
@@ -130,24 +157,4 @@ class MetricsService
     return $grid;
   }
 
-  // ==================================================
-  // UPTIME PERCENT (TODAY)
-  // ==================================================
-  public function uptimePercent(array $metrics): float
-  {
-    if (!$metrics) {
-      return 0.0;
-    }
-
-    $minutes = [];
-
-    foreach ($metrics as $row) {
-      $minutes[date('Y-m-d H:i', (int) $row['created_at'])] = true;
-    }
-
-    $online = count($minutes);
-    $total = 24 * 60;
-
-    return round(($online / $total) * 100, 2);
-  }
 }

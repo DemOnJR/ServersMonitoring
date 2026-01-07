@@ -3,10 +3,27 @@ use Utils\Mask;
 use Server\ServerRepository;
 use Server\PublicPageRepository;
 
+/**
+ * Servers dashboard table.
+ *
+ * Responsibilities:
+ * - Load all servers with their latest metric snapshot (for quick status cards)
+ * - Load public page settings in bulk (avoid N+1 queries)
+ * - Render a compact table with:
+ *   - Online/offline dot (based on OFFLINE_THRESHOLD)
+ *   - CPU/RAM/Disk usage bars (only meaningful when server is online)
+ *   - Last seen age
+ *   - Public page toggle + quick links
+ *   - Inline rename + delete actions
+ */
+
 $repo = new ServerRepository($db);
 $servers = $repo->fetchAllWithLastMetric();
 
-// Load only needed public pages for these servers (optimized)
+/**
+ * Public pages are stored separately. We map them once for all server ids to keep
+ * the page fast (one query instead of per-row queries).
+ */
 $serverIds = array_map(fn($x) => (int) $x['id'], $servers);
 $publicRepo = new PublicPageRepository($db);
 $publicMap = $publicRepo->mapByServerIds($serverIds);
@@ -14,68 +31,110 @@ $publicMap = $publicRepo->mapByServerIds($serverIds);
 /* -----------------------------
    HELPERS (LOCAL ONLY)
 ----------------------------- */
+
+/**
+ * Human-friendly diff formatter used for "last seen".
+ *
+ * @param int $seconds
+ * @return string
+ */
 function humanDiff(int $seconds): string
 {
-  if ($seconds < 60)
+  if ($seconds < 60) {
     return $seconds . 's';
-  if ($seconds < 3600)
+  }
+  if ($seconds < 3600) {
     return floor($seconds / 60) . 'm';
-  if ($seconds < 86400)
+  }
+  if ($seconds < 86400) {
     return floor($seconds / 3600) . 'h';
+  }
   return floor($seconds / 86400) . 'd';
 }
 
+/**
+ * Bootstrap bar color based on usage percentage thresholds.
+ *
+ * @param int $val
+ * @return string
+ */
 function barColor(int $val): string
 {
-  if ($val >= 90)
+  if ($val >= 90) {
     return 'bg-danger';
-  if ($val >= 75)
+  }
+  if ($val >= 75) {
     return 'bg-warning';
+  }
   return 'bg-success';
 }
 
+/**
+ * Lightweight OS-to-badge mapping for the dashboard.
+ * (Detailed mapping is available in ServerViewHelpers; we keep a local copy here
+ * to avoid pulling additional dependencies into the view.)
+ *
+ * @param string|null $os
+ * @return array{icon:string,label:string}
+ */
 function osBadge(?string $os): array
 {
   $os = strtolower(trim((string) $os));
-  if ($os === '')
+  if ($os === '') {
     return ['icon' => 'fa-solid fa-server', 'label' => 'Unknown'];
+  }
 
-  if (str_contains($os, 'windows'))
+  if (str_contains($os, 'windows')) {
     return ['icon' => 'fa-brands fa-windows', 'label' => 'Windows'];
+  }
 
-  if (str_contains($os, 'freebsd'))
+  if (str_contains($os, 'freebsd')) {
     return ['icon' => 'fa-solid fa-anchor', 'label' => 'FreeBSD'];
-  if (str_contains($os, 'openbsd'))
+  }
+  if (str_contains($os, 'openbsd')) {
     return ['icon' => 'fa-solid fa-anchor', 'label' => 'OpenBSD'];
-  if (str_contains($os, 'netbsd'))
+  }
+  if (str_contains($os, 'netbsd')) {
     return ['icon' => 'fa-solid fa-anchor', 'label' => 'NetBSD'];
+  }
 
-  if (str_contains($os, 'ubuntu'))
+  if (str_contains($os, 'ubuntu')) {
     return ['icon' => 'fa-brands fa-ubuntu', 'label' => 'Ubuntu'];
-  if (str_contains($os, 'debian'))
+  }
+  if (str_contains($os, 'debian')) {
     return ['icon' => 'fa-brands fa-debian', 'label' => 'Debian'];
+  }
 
-  if (str_contains($os, 'centos'))
+  if (str_contains($os, 'centos')) {
     return ['icon' => 'fa-brands fa-centos', 'label' => 'CentOS'];
-  if (str_contains($os, 'rocky'))
+  }
+  if (str_contains($os, 'rocky')) {
     return ['icon' => 'fa-brands fa-redhat', 'label' => 'Rocky Linux'];
-  if (str_contains($os, 'alma'))
+  }
+  if (str_contains($os, 'alma')) {
     return ['icon' => 'fa-brands fa-redhat', 'label' => 'AlmaLinux'];
-  if (str_contains($os, 'red hat') || str_contains($os, 'rhel'))
+  }
+  if (str_contains($os, 'red hat') || str_contains($os, 'rhel')) {
     return ['icon' => 'fa-brands fa-redhat', 'label' => 'RHEL'];
-  if (str_contains($os, 'fedora'))
+  }
+  if (str_contains($os, 'fedora')) {
     return ['icon' => 'fa-brands fa-fedora', 'label' => 'Fedora'];
+  }
 
-  if (str_contains($os, 'arch'))
+  if (str_contains($os, 'arch')) {
     return ['icon' => 'fa-brands fa-archlinux', 'label' => 'Arch'];
-  if (str_contains($os, 'suse') || str_contains($os, 'opensuse'))
+  }
+  if (str_contains($os, 'suse') || str_contains($os, 'opensuse')) {
     return ['icon' => 'fa-brands fa-suse', 'label' => 'SUSE'];
+  }
 
-  if (str_contains($os, 'alpine'))
+  if (str_contains($os, 'alpine')) {
     return ['icon' => 'fa-solid fa-mountain', 'label' => 'Alpine'];
+  }
 
-  if (str_contains($os, 'linux'))
+  if (str_contains($os, 'linux')) {
     return ['icon' => 'fa-brands fa-linux', 'label' => 'Linux'];
+  }
 
   return ['icon' => 'fa-solid fa-server', 'label' => ucfirst($os)];
 }
@@ -136,12 +195,25 @@ function osBadge(?string $os): array
         <?php foreach ($servers as $s):
           $id = (int) $s['id'];
 
+          /**
+           * Online/offline is derived from "seconds since last_seen".
+           * OFFLINE_THRESHOLD is a config constant (seconds).
+           */
           $isOnline = ((int) $s['diff']) < OFFLINE_THRESHOLD;
 
+          /**
+           * We show 0% when the server is offline because the "last" metric could be stale.
+           * If you want to show the last known metric instead, remove $isOnline checks here.
+           */
           $cpu = $isOnline && $s['cpu_load'] !== null ? min((int) ($s['cpu_load'] * 100), 100) : 0;
           $ram = ($isOnline && !empty($s['ram_total'])) ? (int) (($s['ram_used'] / $s['ram_total']) * 100) : 0;
           $disk = ($isOnline && !empty($s['disk_total'])) ? (int) (($s['disk_used'] / $s['disk_total']) * 100) : 0;
 
+          /**
+           * Public page mapping was preloaded.
+           * - enabled: toggle state
+           * - slug: used to open public URL when enabled
+           */
           $pub = $publicMap[$id] ?? null;
           $pubEnabled = $pub ? ((int) $pub['enabled'] === 1) : false;
           $pubSlug = $pub['slug'] ?? '';
@@ -162,6 +234,7 @@ function osBadge(?string $os): array
                   <i class="<?= htmlspecialchars($os['icon']) ?>"></i>
                 </span>
 
+                <!-- Clicking the name toggles the inline rename input -->
                 <span class="server-name-text fw-semibold" role="button">
                   <?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>
                 </span>
@@ -171,6 +244,7 @@ function osBadge(?string $os): array
                 </span>
               </div>
 
+              <!-- Inline rename input (hidden by default) -->
               <input type="text" class="form-control form-control-sm server-name-input d-none mt-1" data-id="<?= $id ?>"
                 value="<?= htmlspecialchars($s['display_name'] ?: $s['hostname']) ?>">
 
@@ -213,6 +287,7 @@ function osBadge(?string $os): array
             <!-- PUBLIC -->
             <td>
               <div class="public-cell" data-public-cell="<?= $id ?>">
+                <!-- Toggle public page without reloading -->
                 <div class="form-check form-switch m-0">
                   <input class="form-check-input public-toggle" type="checkbox" role="switch" data-id="<?= $id ?>"
                     <?= $pubEnabled ? 'checked' : '' ?>>
@@ -305,6 +380,9 @@ function osBadge(?string $os): array
   /* =============================
      DATATABLE
   ============================= */
+  // DataTables initialization:
+  // - stateSave remembers paging/sorting
+  // - order by "Last seen" (diff column) ascending
   $(function () {
     $('#serversTable').DataTable({
       pageLength: 25,
@@ -319,6 +397,7 @@ function osBadge(?string $os): array
   /* =============================
      INLINE RENAME
   ============================= */
+  // Click on name -> show input
   document.addEventListener('click', e => {
     const text = e.target.closest('.server-name-text');
     if (!text) return;
@@ -331,6 +410,7 @@ function osBadge(?string $os): array
     input.focus();
   });
 
+  // Blur input -> save and restore text (optimistic UI)
   document.addEventListener('blur', e => {
     if (!e.target.classList.contains('server-name-input')) return;
 
@@ -353,6 +433,7 @@ function osBadge(?string $os): array
   /* =============================
      DELETE
   ============================= */
+  // Use a modal confirm to prevent accidental destructive actions.
   let deleteId = null;
 
   document.addEventListener('click', e => {
@@ -372,8 +453,15 @@ function osBadge(?string $os): array
   });
 
   /* =============================
-    TOGGLE PUBLIC (no reload)
- ============================= */
+     TOGGLE PUBLIC (no reload)
+  ============================= */
+  // Toggle public page on/off without refreshing the table.
+  // When enabling:
+  // - we rely on the backend response slug (source of truth)
+  // - we render an "open" button that points to /preview/?slug=<slug>
+  // When disabling:
+  // - we remove the open button
+  // - we show an "Off" badge
   document.addEventListener('change', async (e) => {
     const el = e.target.closest('.public-toggle');
     if (!el) return;
@@ -398,11 +486,15 @@ function osBadge(?string $os): array
       });
 
       const data = await res.json();
-      if (!data || !data.ok) throw new Error((data && data.error) ? data.error : 'Failed');
+      if (!data || !data.ok) {
+        throw new Error((data && data.error) ? data.error : 'Failed');
+      }
 
-      // IMPORTANT: use slug from response (should be the saved/custom slug)
+      // Backend returns the canonical slug (may be generated or existing).
       const slug = (data.slug || '').toString().trim();
-      if (enabled === '1' && !slug) throw new Error('Public enabled but slug is empty');
+      if (enabled === '1' && !slug) {
+        throw new Error('Public enabled but slug is empty');
+      }
 
       const cell = document.querySelector(`[data-public-cell="${id}"]`);
       if (!cell) return;
@@ -411,13 +503,13 @@ function osBadge(?string $os): array
       const offBadge = cell.querySelector(`[data-public-off="${id}"]`);
 
       if (enabled === '1') {
-        // remove "Off" badge
+        // Remove "Off" badge if present.
         if (offBadge) offBadge.remove();
 
-        // create or update open button
+        // Create or update open button.
         if (!openBtn) {
           const a = document.createElement('a');
-          a.className = 'icon-btn'; // keep consistent with your existing markup
+          a.className = 'icon-btn';
           a.target = '_blank';
           a.href = PUBLIC_BASE + encodeURIComponent(slug);
 
@@ -435,13 +527,13 @@ function osBadge(?string $os): array
           openBtn.href = PUBLIC_BASE + encodeURIComponent(slug);
         }
       } else {
-        // disable: remove open button + tooltip cleanly
+        // Disable: remove open button + tooltip.
         if (openBtn) {
           disposeTooltip(openBtn);
           openBtn.remove();
         }
 
-        // add "Off" badge if missing
+        // Add "Off" badge if missing.
         if (!offBadge) {
           const span = document.createElement('span');
           span.className = 'badge text-bg-secondary';
@@ -451,7 +543,8 @@ function osBadge(?string $os): array
         }
       }
     } catch (err) {
-      el.checked = !el.checked; // rollback
+      // Roll back UI state on failure.
+      el.checked = !el.checked;
       alert(err?.message || 'Failed to update public page');
     } finally {
       el.disabled = false;

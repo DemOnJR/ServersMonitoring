@@ -3,18 +3,40 @@ declare(strict_types=1);
 
 namespace Alert\Channel;
 
+use RuntimeException;
+
+/**
+ * Default Discord embed colors per metric type.
+ *
+ * Used as a fallback when a rule does not explicitly define a color.
+ */
 const METRIC_COLORS = [
-  'cpu'     => 15158332,
-  'ram'     => 3447003,
-  'disk'    => 15844367,
-  'network' => 10181046,
+    'cpu' => 15158332,
+    'ram' => 3447003,
+    'disk' => 15844367,
+    'network' => 10181046,
 ];
 
-use RuntimeException;
-use Alert\Channel\DiscordException;
-
+/**
+ * Sends alert notifications to Discord via webhook.
+ *
+ * Responsible only for transport-level concerns and payload formatting,
+ * without any alert evaluation or business logic.
+ */
 class DiscordChannel
 {
+    /**
+     * Sends a Discord webhook payload.
+     *
+     * @param string $webhook Discord webhook URL.
+     * @param string|null $mentions Optional mentions content (roles/users/everyone).
+     * @param array<string, mixed> $embed Discord embed payload.
+     *
+     * @return void
+     *
+     * @throws RuntimeException When payload creation or transport fails.
+     * @throws DiscordException When Discord responds with a non-success status.
+     */
     public function send(
         string $webhook,
         ?string $mentions = null,
@@ -22,29 +44,27 @@ class DiscordChannel
     ): void {
         $payload = [];
 
-        // mentions (optional)
-        if ($mentions) {
+        if ($mentions !== null && trim($mentions) !== '') {
             $payload['content'] = $mentions;
 
-            // IMPORTANT: allow mentions to actually ping
+            // Explicitly enable mentions to allow role/user pings when configured by the rule author.
             $payload['allowed_mentions'] = [
-                'parse' => ['roles', 'users', 'everyone']
+                'parse' => ['roles', 'users', 'everyone'],
             ];
         }
 
-        // embed (required for rich alerts)
         if (!empty($embed)) {
             $payload['embeds'] = [$embed];
         }
 
-        if (empty($payload)) {
-            throw new RuntimeException('Discord payload is empty');
+        if ($payload === []) {
+            throw new RuntimeException('Discord payload is empty.');
         }
 
         $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
 
         if ($json === false) {
-            throw new RuntimeException('JSON encode failed');
+            throw new RuntimeException('Failed to encode Discord payload as JSON.');
         }
 
         $ch = curl_init($webhook);
@@ -65,11 +85,11 @@ class DiscordChannel
 
         curl_close($ch);
 
-        if ($error) {
+        if ($error !== '') {
             throw new RuntimeException('Discord cURL error: ' . $error);
         }
 
-        // Discord returns 204 No Content on success
+        // Discord returns HTTP 204 No Content for successful webhook delivery.
         if ($httpCode !== 204) {
 
             $msg = 'Discord webhook error';
@@ -88,6 +108,5 @@ class DiscordChannel
                 $response
             );
         }
-
     }
 }
