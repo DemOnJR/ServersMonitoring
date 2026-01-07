@@ -41,6 +41,200 @@ json_escape() {
   echo -n "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' -e 's/\n/\\n/g'
 }
 
+# ---------------------------
+# Service issues (Option B: 1 journalctl call) -> produces JSON array: [...]
+# ---------------------------
+SERVICE_SINCE_MINUTES=120
+SERVICE_PRIORITY="warning"
+SERVICE_MAX_NEW=30
+SERVICE_TTL_SECONDS=86400
+SERVICE_STATE_DIR="$INSTALL_DIR/state"
+SERVICE_STATE_FILE="$SERVICE_STATE_DIR/error_hashes"
+
+SERVICE_EXCLUDE_RE='^(systemd-|dbus|cron|rsyslog|networkd|resolved|udev|polkit|getty|accounts-daemon|logind|snapd|wpa_supplicant|avahi|bluetooth|ModemManager|apport|fwupd|thermald|ua-|ubuntu-advantage|unattended-upgrades|upower|udisks2)\.service$'
+
+build_service_issues_json_array() {
+  # default safe empty array
+  local out="[]"
+
+  # Needs: systemd/journalctl + jq + sha256sum + awk
+  if ! has_cmd journalctl || ! has_cmd systemctl || ! has_cmd jq || ! has_cmd sha256sum || ! has_cmd awk; then
+    echo "$out"
+    return
+  fi
+
+  mkdir -p "$SERVICE_STATE_DIR" 2>/dev/null || true
+  touch "$SERVICE_STATE_FILE" 2>/dev/null || true
+
+  local now epoch
+  epoch=$(date +%s)
+
+  # prune TTL
+  awk -v now="$epoch" -v ttl="$SERVICE_TTL_SECONDS" 'NF>=2 && (now-$2)<ttl {print}' \
+    "$SERVICE_STATE_FILE" > "$SERVICE_STATE_FILE.tmp" 2>/dev/null \
+    && mv "$SERVICE_STATE_FILE.tmp" "$SERVICE_STATE_FILE" || true
+
+  # services: running + failed, filtered
+  local services meta_tmp add_tmp
+  services=$(
+    {
+      systemctl list-units --type=service --state=running --no-legend --no-pager 2>/dev/null | awk '{print $1}'
+      systemctl list-units --type=service --state=failed  --no-legend --no-pager 2>/dev/null | awk '{print $1}'
+    } | sort -u | grep -Ev "$SERVICE_EXCLUDE_RE" || true
+  )
+
+  meta_tmp=$(mktemp)
+  add_tmp=$(mktemp)
+  trap 'rm -f "$meta_tmp" "$add_tmp"' RETURN
+
+  if [ -n "${services:-}" ]; then
+    systemctl show $services \
+      -p Id -p ActiveState -p SubState -p ExecMainStatus -p NRestarts -p Type -p Result \
+      --no-pager 2>/dev/null > "$meta_tmp" || true
+  else
+    : > "$meta_tmp"
+  fi
+
+  # One journalctl call, jq -> tsv(unit, message), awk -> build JSON objects joined by commas
+  out=$(
+    journalctl --since "$SERVICE_SINCE_MINUTES min ago" -p "$SERVICE_PRIORITY" \
+      -o json --output-fields=_SYSTEMD_UNIT,MESSAGE --no-pager 2>/dev/null \
+    | jq -r 'select(._SYSTEMD_UNIT and .MESSAGE) | [._SYSTEMD_UNIT, .MESSAGE] | @tsv' \
+    | awk -v meta="$meta_tmp" -v state="$SERVICE_STATE_FILE" -v addfile="$add_tmp" -v now="$epoch" -v maxn="$SERVICE_MAX_NEW" '
+BEGIN {
+  FS="\t";
+
+  # load state hashes
+  while ((getline < state) > 0) {
+    split($0, a, " ");
+    if (a[1] != "") seen[a[1]] = 1;
+  }
+  close(state);
+
+  # load metadata
+  cur="";
+  while ((getline < meta) > 0) {
+    if ($0 == "") { cur=""; continue; }
+    split($0, kv, "=");
+    k=kv[1]; v=substr($0, length(k)+2);
+    if (k=="Id") cur=v;
+    if (cur!="") {
+      if (k=="ActiveState") active[cur]=v;
+      if (k=="SubState") substate[cur]=v;
+      if (k=="ExecMainStatus") execstatus[cur]=v;
+      if (k=="NRestarts") restarts[cur]=v;
+      if (k=="Type") stype[cur]=v;
+      if (k=="Result") result[cur]=v;
+    }
+  }
+  close(meta);
+
+  first=1;
+}
+
+function strip_ctrl(s,    t) {
+  t=s;
+  gsub(/[\001-\010\013\014\016-\037]/, "", t);
+  return t;
+}
+function jesc(s,    t) {
+  t=strip_ctrl(s);
+  gsub(/\\/,"\\\\",t);
+  gsub(/"/,"\\\"",t);
+  gsub(/\t/,"\\t",t);
+  gsub(/\r/,"\\r",t);
+  gsub(/\n/,"\\n",t);
+  return t;
+}
+function normalize(s,    t) {
+  t=strip_ctrl(s);
+  gsub(/\[[0-9]+\]/,"",t);
+  gsub(/[0-9]{4,}/,"<N>",t);
+  gsub(/[[:space:]]+/," ",t);
+  sub(/^ /,"",t); sub(/ $/,"",t);
+  return t;
+}
+function squote(s,    t) { t=s; gsub(/'\''/,"'\''\"'\''\"'\''",t); return "'"'"'" t "'"'"'"; }
+function sha256(str,    cmd, out, p) {
+  cmd = "printf %s " squote(str) " | sha256sum 2>/dev/null";
+  cmd | getline out;
+  close(cmd);
+  split(out, p, " ");
+  return p[1];
+}
+
+{
+  unit=$1; msg=$2;
+  if (unit=="" || msg=="") next;
+
+  nmsg=normalize(msg);
+
+  k = unit SUBSEP nmsg;
+  if (seen_run[k]) next;
+  seen_run[k]=1;
+
+  h = sha256(unit "|" nmsg);
+  if (h=="" ) next;
+  if (seen[h]) next;
+  seen[h]=1;
+
+  print h " " now >> addfile;
+
+  if (count[unit] < maxn) {
+    count[unit]++;
+    if (logs[unit] == "") logs[unit] = nmsg;
+    else logs[unit] = logs[unit] "\n" nmsg;
+  }
+}
+
+END {
+  # emit services with new logs
+  for (u in logs) emit(u);
+
+  # also include failed/restarting services even if no new logs
+  for (u in active) {
+    if (logs[u] != "") continue;
+    if (active[u] == "failed" || (restarts[u] != "" && restarts[u] != "0")) emit(u);
+  }
+}
+
+function emit(u,    a,ss,t,r,es,rs,lg,c) {
+  a  = (u in active) ? active[u] : "";
+  ss = (u in substate) ? substate[u] : "";
+  t  = (u in stype) ? stype[u] : "";
+  r  = (u in result) ? result[u] : "";
+  es = (u in execstatus) ? execstatus[u] : "";
+  rs = (u in restarts) ? restarts[u] : "";
+  c  = (u in count) ? count[u] : 0;
+  lg = (u in logs) ? logs[u] : "";
+
+  if (!first) printf(",");
+  first=0;
+
+  printf("{\"service\":\"%s\",\"active_state\":\"%s\",\"sub_state\":\"%s\",\"type\":\"%s\",\"result\":\"%s\",\"exec_status\":\"%s\",\"restarts\":\"%s\",\"new_unique_count\":%d,\"new_unique_logs\":\"%s\"}",
+         jesc(u), jesc(a), jesc(ss), jesc(t), jesc(r), jesc(es), jesc(rs), c, jesc(lg));
+}
+' 2>/dev/null
+  )
+
+  # append hashes to state
+  if [ -s "$add_tmp" ]; then
+    cat "$add_tmp" >> "$SERVICE_STATE_FILE" 2>/dev/null || true
+  fi
+
+  # ensure valid array (even if empty string)
+  if [ -z "${out:-}" ]; then
+    echo "[]"
+  else
+    echo "[$out]"
+  fi
+}
+
+SERVICE_ISSUES_JSON=$(build_service_issues_json_array)
+
+# ---------------------------
+# Existing metrics collection (unchanged)
+# ---------------------------
 CPU_MODEL=$(awk -F: '/model name/ {print $2; exit}' /proc/cpuinfo | xargs)
 CPU_VENDOR=$(awk -F: '/vendor_id/ {print $2; exit}' /proc/cpuinfo | xargs)
 CPU_CORES=$(nproc 2>/dev/null || echo 0)
@@ -228,7 +422,8 @@ curl -4 -s -X POST "$API_URL" \
       \"uptime\": \"$ESC_UPTIME\",
       \"public_ip\": \"$ESC_PUBLIC_IP\",
       \"filesystems_json\": $FILESYSTEMS_JSON
-    }
+    },
+    \"service_issues\": $SERVICE_ISSUES_JSON
   }" >/dev/null 2>&1 || true
 EOF
 

@@ -3,13 +3,34 @@ declare(strict_types=1);
 
 namespace Auth;
 
+/**
+ * Handles authentication state and basic brute-force protection.
+ *
+ * Uses session-based authentication with temporary blocking
+ * after repeated failed login attempts.
+ */
 class Auth
 {
+  /**
+   * Checks whether the current session is authenticated.
+   *
+   * @return bool True if the user is authenticated.
+   */
   public static function check(): bool
   {
     return ($_SESSION['auth'] ?? false) === true;
   }
 
+  /**
+   * Attempts to authenticate the user using a password.
+   *
+   * Applies rate-limiting by blocking authentication attempts
+   * after a configured number of failures.
+   *
+   * @param string $password Plain-text password provided by the user.
+   *
+   * @return bool True on successful authentication, false otherwise.
+   */
   public static function login(string $password): bool
   {
     if (self::isBlocked()) {
@@ -21,6 +42,7 @@ class Auth
       return false;
     }
 
+    // Regenerate session id to prevent session fixation after successful login.
     session_regenerate_id(true);
 
     $_SESSION['auth'] = true;
@@ -30,6 +52,11 @@ class Auth
     return true;
   }
 
+  /**
+   * Logs out the current user and destroys the session.
+   *
+   * @return void
+   */
   public static function logout(): void
   {
     $_SESSION = [];
@@ -50,6 +77,11 @@ class Auth
     session_destroy();
   }
 
+  /**
+   * Determines whether authentication attempts are temporarily blocked.
+   *
+   * @return bool True if login is currently blocked.
+   */
   public static function isBlocked(): bool
   {
     if (empty($_SESSION['blocked_until'])) {
@@ -64,6 +96,12 @@ class Auth
     return true;
   }
 
+  /**
+   * Registers a failed login attempt and applies blocking
+   * when the configured threshold is reached.
+   *
+   * @return void
+   */
   private static function registerFailure(): void
   {
     $_SESSION['failures'] = ($_SESSION['failures'] ?? 0) + 1;

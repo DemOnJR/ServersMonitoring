@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 require_once __DIR__ . '/../../App/Bootstrap.php';
 
 use Auth\Guard;
@@ -6,17 +8,25 @@ use Auth\Guard;
 Guard::protect();
 header('Content-Type: application/json');
 
+/**
+ * Converts an input string into a URL-safe slug.
+ *
+ * @param string $s Input string.
+ *
+ * @return string Slug-safe string (fallback: "server").
+ */
 function slugify(string $s): string
 {
   $s = trim($s);
-  $s = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+  $s = (string) iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
   $s = strtolower($s);
-  $s = preg_replace('/[^a-z0-9]+/i', '-', $s);
+  $s = preg_replace('/[^a-z0-9]+/i', '-', $s) ?? '';
   $s = trim($s, '-');
-  return $s ?: 'server';
+
+  return $s !== '' ? $s : 'server';
 }
 
-$action = $_GET['action'] ?? '';
+$action = (string) ($_GET['action'] ?? '');
 
 try {
   if ($action === 'toggleEnabled') {
@@ -28,7 +38,6 @@ try {
       exit;
     }
 
-    // ensure server exists
     $st = $db->prepare("SELECT id, hostname, display_name FROM servers WHERE id=? LIMIT 1");
     $st->execute([$id]);
     $srv = $st->fetch(PDO::FETCH_ASSOC);
@@ -38,15 +47,12 @@ try {
       exit;
     }
 
-    // IMPORTANT:
-    // If server_public_pages row already exists -> KEEP its slug
-    // If not exists -> create with a generated slug once
+    // Preserve the existing slug once created to avoid breaking shared links.
     $st2 = $db->prepare("SELECT slug FROM server_public_pages WHERE server_id=? LIMIT 1");
     $st2->execute([$id]);
     $existingSlug = $st2->fetchColumn();
 
     if ($existingSlug !== false && $existingSlug !== null && trim((string) $existingSlug) !== '') {
-      // Update only enabled + updated_at, keep slug unchanged
       $stmt = $db->prepare("
         UPDATE server_public_pages
         SET enabled = :enabled,
@@ -55,18 +61,18 @@ try {
       ");
       $stmt->execute([
         ':server_id' => $id,
-        ':enabled' => $enabled
+        ':enabled' => $enabled,
       ]);
 
       echo json_encode([
         'ok' => true,
         'enabled' => (bool) $enabled,
-        'slug' => (string) $existingSlug
+        'slug' => (string) $existingSlug,
       ]);
       exit;
     }
 
-    // Row doesn't exist yet (or slug empty) -> create it with generated slug ONCE
+    // Create the row with a generated slug only on first enable/save.
     $base = trim((string) ($srv['display_name'] ?? '')) ?: (string) ($srv['hostname'] ?? 'server');
     $slug = slugify($base) . '-' . (int) $srv['id'];
 
@@ -87,26 +93,25 @@ try {
     $stmt->execute([
       ':server_id' => $id,
       ':enabled' => $enabled,
-      ':slug' => $slug
+      ':slug' => $slug,
     ]);
 
     echo json_encode(['ok' => true, 'enabled' => (bool) $enabled, 'slug' => $slug]);
     exit;
   }
 
-
   if ($action === 'saveSettings') {
     $id = (int) ($_POST['id'] ?? 0);
+
     if ($id <= 0) {
       echo json_encode(['ok' => false, 'error' => 'Missing id']);
       exit;
     }
 
-    // slug base (user input should be WITHOUT "-id")
+    // User input is expected without "-id"; we enforce the suffix to keep slugs unique.
     $slug = trim((string) ($_POST['slug'] ?? ''));
 
     if ($slug === '') {
-      // generate from server name
       $st = $db->prepare("SELECT id, hostname, display_name FROM servers WHERE id=? LIMIT 1");
       $st->execute([$id]);
       $srv = $st->fetch(PDO::FETCH_ASSOC);
@@ -121,7 +126,6 @@ try {
     } else {
       $slug = slugify($slug);
 
-      // ensure suffix "-<id>" exactly once
       if (!preg_match('/-' . preg_quote((string) $id, '/') . '$/', $slug)) {
         $slug .= '-' . $id;
       }
@@ -143,7 +147,7 @@ try {
       $passHash = password_hash($newPass, PASSWORD_DEFAULT);
     }
 
-    // If row exists, keep old password_hash unless new password provided
+    // Keep the existing password hash unless the user explicitly sets a new password.
     $old = $db->prepare("SELECT password_hash FROM server_public_pages WHERE server_id=? LIMIT 1");
     $old->execute([$id]);
     $oldHash = $old->fetchColumn();

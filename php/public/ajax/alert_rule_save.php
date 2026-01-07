@@ -1,11 +1,12 @@
 <?php
 declare(strict_types=1);
 
-/* JSON only */
+// Force JSON responses and avoid leaking stack traces/HTML into API output.
 ini_set('display_errors', '0');
 ini_set('display_startup_errors', '0');
 error_reporting(E_ALL);
 
+// Buffer output so we can reliably return clean JSON even if something echoes early.
 ob_start();
 
 require_once __DIR__ . '/../../App/Bootstrap.php';
@@ -16,10 +17,20 @@ Guard::protect();
 
 header('Content-Type: application/json');
 
+/**
+ * Outputs a JSON response and terminates the request.
+ *
+ * @param array<string, mixed> $data Response payload.
+ * @param int $code HTTP status code.
+ *
+ * @return void
+ */
 function json_out(array $data, int $code = 200): void
 {
-  if (ob_get_length())
+  if (ob_get_length()) {
     ob_clean();
+  }
+
   http_response_code($code);
   echo json_encode($data, JSON_UNESCAPED_SLASHES);
   exit;
@@ -37,9 +48,6 @@ try {
     throw new RuntimeException('Alert title is required');
   }
 
-  /* =========================
-     INSERT / UPDATE ALERT
-  ========================= */
   if ($alertId > 0) {
     $stmt = $db->prepare("
       UPDATE alerts
@@ -56,9 +64,6 @@ try {
     $alertId = (int) $db->lastInsertId();
   }
 
-  /* =========================
-     READ ARRAYS
-  ========================= */
   $ruleIds = $_POST['rule_id'] ?? [];
   $ruleKeys = $_POST['rule_key'] ?? [];
   $ruleColors = $_POST['rule_color'] ?? [];
@@ -117,20 +122,19 @@ try {
     $mentions = trim((string) ($ruleMentions[$i] ?? ''));
     $webhook = trim((string) ($webhooks[$i] ?? ''));
 
-    // apply defaults if empty
-    if ($title === '')
+    if ($title === '') {
       $title = $defaults[$metric]['title'] ?? 'Alert triggered';
-    if ($description === '')
+    }
+    if ($description === '') {
       $description = $defaults[$metric]['description'] ?? 'A threshold was exceeded.';
+    }
 
-    /* =========================
-       INSERT / UPDATE RULE
-    ========================= */
     if ($ruleId > 0) {
-      // make sure rule belongs to this alert
+      // Prevent cross-alert edits if a stale id is submitted from the UI.
       $stmt = $db->prepare("SELECT alert_id FROM alert_rules WHERE id = ?");
       $stmt->execute([$ruleId]);
       $belongsTo = (int) $stmt->fetchColumn();
+
       if ($belongsTo !== $alertId) {
         throw new RuntimeException('Rule does not belong to this alert');
       }
@@ -155,10 +159,7 @@ try {
       $ruleId = (int) $db->lastInsertId();
     }
 
-    /* =========================
-       TARGET SERVERS
-       - IMPORTANT: use ruleKey, not ruleId (new rules don't have an id yet)
-    ========================= */
+    // Use the stable ruleKey to map server selections before the DB id exists.
     $db->prepare("DELETE FROM alert_rule_targets WHERE rule_id = ?")->execute([$ruleId]);
 
     $targetServers = $serversByKey[$ruleKey] ?? [];
@@ -169,12 +170,7 @@ try {
       }
     }
 
-    /* =========================
-       DISCORD CHANNEL
-       - if webhook empty => unlink channels
-       - else create/reuse channel and link
-    ========================= */
-    // Always clear old link first
+    // Always clear old links first to avoid stale channel bindings.
     $db->prepare("DELETE FROM alert_rule_channels WHERE rule_id = ?")->execute([$ruleId]);
 
     if ($webhook !== '') {
@@ -212,10 +208,11 @@ try {
     'ok' => true,
     'alertId' => $alertId,
   ]);
-
 } catch (Throwable $e) {
-  if ($db->inTransaction())
+  if ($db->inTransaction()) {
     $db->rollBack();
+  }
+
   json_out([
     'ok' => false,
     'error' => $e->getMessage(),

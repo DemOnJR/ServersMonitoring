@@ -1,26 +1,16 @@
 <?php
 declare(strict_types=1);
 
-/*
-|--------------------------------------------------------------------------
-| BOOTSTRAP
-|--------------------------------------------------------------------------
-| - Loads config
-| - Registers autoloader
-| - Creates DB (App\Database\PDO)
-| - Starts session
-| - Security headers
-|--------------------------------------------------------------------------
-*/
+// Application bootstrap.
+// Responsible for loading configuration, initializing the autoloader,
+// creating the database connection, starting a secure session and
+// applying basic security hardening.
 
-// ==================================================
-// LOAD CONFIG (CONSTANTS)
-// ==================================================
+// Load configuration constants.
 require_once __DIR__ . '/../config/config.php';
 
-// ==================================================
-// AUTOLOADER (PSR-4 SIMPLE)
-// ==================================================
+// Register a minimal PSR-4–style autoloader.
+// This keeps the project dependency-free and predictable.
 spl_autoload_register(function (string $class): void {
   $file = __DIR__ . '/' . str_replace('\\', '/', $class) . '.php';
   if (is_file($file)) {
@@ -28,12 +18,9 @@ spl_autoload_register(function (string $class): void {
   }
 });
 
-
-// ==================================================
-// DATABASE INIT (SQLITE)
-// ==================================================
 use Database\PDO;
 
+// Initialize the database connection early so fatal errors fail fast.
 try {
   $db = new PDO('sqlite:' . DB_PATH);
 } catch (Throwable $e) {
@@ -41,15 +28,13 @@ try {
   exit('Database connection failed: ' . $e->getMessage());
 }
 
-// SQLite tuning
+// SQLite tuning for better concurrency and safety.
 $db->exec('PRAGMA journal_mode = WAL;');
 $db->exec('PRAGMA foreign_keys = ON;');
 $db->exec('PRAGMA synchronous = NORMAL;');
 $db->exec('PRAGMA busy_timeout = 5000;');
 
-// ==================================================
-// SESSION SECURITY
-// ==================================================
+// Enforce secure session behavior to reduce fixation and hijacking risk.
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');
 ini_set('session.cookie_httponly', '1');
@@ -58,9 +43,7 @@ ini_set(
   (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? '1' : '0'
 );
 
-// ==================================================
-// SESSION START
-// ==================================================
+// Start session after all parameters are set.
 session_name(SESSION_NAME);
 
 $sessionDir = BASE_PATH . '/storage/sessions';
@@ -72,9 +55,7 @@ if (!is_dir($sessionDir)) {
 session_save_path($sessionDir);
 session_start();
 
-// ==================================================
-// SESSION HIJACK PROTECTION
-// ==================================================
+// Bind the session to the user agent to mitigate session hijacking.
 if (!isset($_SESSION['_ua'])) {
   $_SESSION['_ua'] = sha1($_SERVER['HTTP_USER_AGENT'] ?? '');
 } elseif ($_SESSION['_ua'] !== sha1($_SERVER['HTTP_USER_AGENT'] ?? '')) {
@@ -84,39 +65,38 @@ if (!isset($_SESSION['_ua'])) {
   exit;
 }
 
-// ==================================================
-// TIMEZONE
-// ==================================================
+// Use a fixed timezone to avoid inconsistent timestamps.
 date_default_timezone_set('UTC');
 
-// ==================================================
-// SECURITY HEADERS
-// ==================================================
+// Apply basic security headers if output has not started yet.
 if (!headers_sent()) {
   header('X-Frame-Options: DENY');
   header('X-Content-Type-Options: nosniff');
   header('Referrer-Policy: no-referrer');
 }
 
-// ==================================================
-// FINAL DB CHECK
-// ==================================================
+// Final sanity check to ensure the DB layer is usable.
 if (!$db instanceof \PDO) {
   http_response_code(500);
   exit('Database not initialized');
 }
 
+/**
+ * Builds the application base URL in a proxy-safe way.
+ *
+ * @return string Base URL including scheme and host.
+ */
 function appBaseUrl(): string
 {
-  // Proxy-safe scheme
+  // Prefer forwarded proto when running behind a reverse proxy.
   $proto = $_SERVER['HTTP_X_FORWARDED_PROTO']
     ?? ($_SERVER['REQUEST_SCHEME'] ?? (($_SERVER['HTTPS'] ?? '') === 'on' ? 'https' : 'http'));
 
-  // Proxy-safe host
+  // Prefer forwarded host to support proxy setups.
   $host = $_SERVER['HTTP_X_FORWARDED_HOST']
     ?? ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost');
 
-  // If multiple forwarded hosts: "a,b" -> take first
+  // If multiple hosts are provided, use the first one.
   $host = trim(explode(',', $host)[0]);
 
   return $proto . '://' . $host;

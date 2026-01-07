@@ -1,0 +1,71 @@
+site_name: ServersMonitoring
+site_url: ""
+repo_url: "https://github.com/DemOnJR/ServersMonitoring"
+repo_name: "DemOnJR/ServersMonitoring"
+
+docs_dir: Documentation
+site_dir: public/docs
+
+theme:
+      name: material
+      language: ro
+      features:
+            - navigation.instant
+            - navigation.sections
+            - navigation.tracking
+            - content.code.copy
+            - toc.follow
+      palette:
+            # Default = DARK
+            - scheme: slate
+              toggle:
+                    icon: material/weather-sunny
+                    name: Treci la modul luminos
+            # Optional light mode
+            - scheme: default
+              toggle:
+                    icon: material/weather-night
+                    name: Treci la modul întunecat
+
+plugins:
+      - search
+      - mkdocs_github_changelog:
+              # This creates/overwrites a markdown page at build time.
+              # Make sure the path exists in your nav (see below).
+              output_path: changelog.md
+              # Uses repo_url by default; you can also set:
+              # repo_url: "https://github.com/DemOnJR/ServersMonitoring"
+
+nav:
+      - Acasa: index.md
+      - Arhitectura: architecture/overview.md
+      - Tutoriale:
+              - Servers: tutorials/servers.md
+              - Public pages: tutorials/public-pages.md
+              - Services: tutorials/services.md
+              - Alerts: tutorials/alerts.md
+              - Agents: tutorials/agents.md
+      - Avansat:
+              - App file map: advanced/app-files.md
+              - Public file map: advanced/public-files.md
+              - API payload reference: advanced/api-payload.md
+
+markdown_extensions:
+      - admonition
+      - toc:
+              permalink: true
+      - tables
+      - footnotes
+      - attr_list
+      - def_list
+      - md_in_html
+      - pymdownx.highlight:
+              anchor_linenums: true
+              use_pygments: true
+      - pymdownx.superfences
+      - pymdownx.inlinehilite
+      - pymdownx.details
+      - pymdownx.tabbed:
+              alternate_style: true
+      - pymdownx.tasklist:
+              custom_checkbox: true

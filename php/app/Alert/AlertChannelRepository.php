@@ -4,9 +4,20 @@ declare(strict_types=1);
 namespace Alert;
 
 use PDO;
+use PDOException;
 
+/**
+ * Repository responsible for alert channels and rule-channel bindings.
+ *
+ * Provides read operations for resolving which enabled channels should receive a rule notification.
+ */
 final class AlertChannelRepository
 {
+  /**
+   * AlertChannelRepository constructor.
+   *
+   * @param PDO $db Database connection.
+   */
   public function __construct(
     private PDO $db
   ) {
@@ -15,9 +26,11 @@ final class AlertChannelRepository
   /**
    * Returns all enabled channels linked to a rule.
    *
-   * Expected schema:
-   *  alert_rule_channels(rule_id, channel_id)
-   *  alert_channels(id, type, name, config_json, enabled, ...)
+   * @param int $ruleId Rule id.
+   *
+   * @return array<int, array<string, mixed>> List of enabled channels for the rule.
+   *
+   * @throws PDOException When the query fails.
    */
   public function getChannelsForRule(int $ruleId): array
   {
@@ -31,11 +44,20 @@ final class AlertChannelRepository
         ");
     $stmt->execute([$ruleId]);
 
-    return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    /** @var array<int, array<string, mixed>> $rows */
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    return $rows ?: [];
   }
 
   /**
-   * Optional helper: get a single channel
+   * Returns a single channel by id.
+   *
+   * @param int $channelId Channel id.
+   *
+   * @return array<string, mixed>|null Channel data or null if not found.
+   *
+   * @throws PDOException When the query fails.
    */
   public function getById(int $channelId): ?array
   {
@@ -47,7 +69,9 @@ final class AlertChannelRepository
         ");
     $stmt->execute([$channelId]);
 
+    /** @var array<string, mixed>|false $row */
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
     return $row ?: null;
   }
 }

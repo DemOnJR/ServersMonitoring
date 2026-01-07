@@ -58,16 +58,4 @@ final class AlertStateRepository
         ");
         $stmt->execute([$ruleId, $serverId, $now, $value]);
     }
-
-    /**
-     * Optional helper (useful for debugging/reset)
-     */
-    public function reset(int $ruleId, int $serverId): void
-    {
-        $stmt = $this->db->prepare("
-            DELETE FROM alert_state
-            WHERE rule_id = ? AND server_id = ?
-        ");
-        $stmt->execute([$ruleId, $serverId]);
-    }
 }

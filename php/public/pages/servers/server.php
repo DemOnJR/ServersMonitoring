@@ -8,15 +8,43 @@ use Utils\ChartSeries;
 use Server\ServerViewHelpers;
 use Install\AgentInstall;
 
+/**
+ * Server detail page (admin).
+ *
+ * Responsibilities:
+ * - Load server + latest metrics for the header cards
+ * - Build chart-ready series for Chart.js (CPU/RAM/Network/Disk)
+ * - Render uptime grid for "today"
+ * - Provide agent reinstall command (token-based) when available
+ * - Provide quick toggle for the server public page feature
+ */
+
+/**
+ * HTML escape helper for safe output.
+ *
+ * @param mixed $v
+ * @return string
+ */
 function h($v): string
 {
   return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
 }
+
+/**
+ * Normalize any value to int (default 0).
+ *
+ * @param mixed $v
+ * @return int
+ */
 function nint($v): int
 {
   return (int) ($v ?? 0);
 }
 
+/**
+ * Read and validate server id from query string.
+ * We treat invalid/missing id as a user error (400-like UI message).
+ */
 $serverId = (int) ($_GET['id'] ?? 0);
 if ($serverId <= 0) {
   echo '<div class="alert alert-danger">Invalid server ID</div>';
@@ -24,6 +52,11 @@ if ($serverId <= 0) {
 }
 
 $serverRepo = new ServerRepository($db);
+
+/**
+ * Load server details.
+ * ServerRepository::findById throws when missing; we render a friendly message instead of a hard crash.
+ */
 try {
   $server = $serverRepo->findById($serverId);
 } catch (Throwable) {
@@ -31,28 +64,56 @@ try {
   return;
 }
 
+/**
+ * Public page info is stored in server_public_pages (enabled + slug).
+ * This is used to show a badge + open link and to drive the toggle button state.
+ */
 $pub = $serverRepo->getPublicPage($serverId);
 $publicEnabled = (bool) ($pub['enabled'] ?? false);
 $publicSlug = trim((string) ($pub['slug'] ?? ''));
+
+// Public URL format (kept here for UI; PublicPageRepository centralizes this logic elsewhere).
 $publicBaseUrl = '/preview/?slug='; // adjust if needed
 $publicUrl = $publicSlug !== '' ? $publicBaseUrl . rawurlencode($publicSlug) : '';
 
+/**
+ * IP history helps debug dynamic IPs and connectivity patterns.
+ */
 $ipHistory = $serverRepo->getIpHistory($serverId, 50);
 
+/**
+ * Resource totals are stored in server_resources; metrics snapshots store only "used".
+ * We keep totals in a simple array for service calculations.
+ */
 $resources = [
   'ram_total' => nint($server['ram_total']),
   'swap_total' => nint($server['swap_total']),
   'disk_total' => nint($server['disk_total']),
 ];
 
+/**
+ * Metrics service produces chart-ready series and computed helpers (uptime grid, latest snapshot).
+ */
 $metricsRepo = new MetricsRepository($db);
 $metricsSvc = new MetricsService($metricsRepo);
 
+// Today's metrics are used for charts and uptime grid.
 $metricsToday = $metricsSvc->today($serverId);
+
+// Latest metric snapshot powers the top summary cards.
 $latest = $metricsSvc->latest($serverId);
 
+/**
+ * Uptime grid is a 24x60 matrix used for the minute-dot visualization.
+ */
 $uptimeGrid = $metricsSvc->uptimeGrid($metricsToday);
 
+/**
+ * Chart series preparation:
+ * - cpuRamSeries: CPU% + RAM% aligned on labels
+ * - ChartSeries::percent: clamp 0..100 + optionally fill gaps
+ * - downsample: avoid huge arrays causing slow Chart.js rendering
+ */
 $cpuRamRaw = $metricsSvc->cpuRamSeries($metricsToday, $resources);
 $cpuRamSeries = ChartSeries::downsample(
   ChartSeries::percent($cpuRamRaw, ['cpu', 'ram'], 2, true),
@@ -60,6 +121,10 @@ $cpuRamSeries = ChartSeries::downsample(
   240
 );
 
+/**
+ * Network chart series:
+ * service returns per-interval MB deltas; we normalize and downsample the same way.
+ */
 $netRaw = $metricsSvc->networkSeries($metricsToday);
 $netSeries = ChartSeries::downsample(
   ChartSeries::network($netRaw, ['rx', 'tx'], 2, true),
@@ -67,6 +132,10 @@ $netSeries = ChartSeries::downsample(
   240
 );
 
+/**
+ * Disk chart is computed here because disk_used is in metrics and disk_total is in resources.
+ * We map today's snapshots to a % series aligned with the CPU/RAM labels.
+ */
 $diskRaw = [
   'labels' => $cpuRamRaw['labels'] ?? [],
   'disk' => array_map(
@@ -82,14 +151,25 @@ $diskSeries = ChartSeries::downsample(
   240
 );
 
+/**
+ * Decode optional JSON blobs reported by the agent.
+ * These are used for "Disks" and "Filesystems" tables.
+ */
 $disks = $serverRepo->decodeJsonArray($server['disks_json'] ?? null);
 $filesystems = $serverRepo->decodeJsonArray($server['filesystems_json'] ?? null);
 
+/**
+ * Agent token is required for "reinstall" command generation.
+ * If the token is missing, we show a warning and hide the reinstall modal.
+ */
 $agentToken = (string) ($server['agent_token'] ?? '');
 $hasToken = $agentToken !== '';
 
+/**
+ * Agent install URL uses the base app URL (proxy-safe; see Bootstrap::appBaseUrl()).
+ * The AgentInstall helper builds a Windows or Linux command string.
+ */
 $installBase = appBaseUrl() . '/install/machine/';
-
 $install = AgentInstall::fromServer(
   $installBase,
   $server['os'] ?? ($latest['os'] ?? null),
@@ -100,8 +180,15 @@ $isWindows = $install['isWindows'];
 $installUrl = $install['url'];
 $cmd = $install['cmd'];
 
+/**
+ * OS badge helper gives us icon + label + raw string for tooltips.
+ */
 $osInfo = ServerViewHelpers::osBadge($server['os'] ?? ($latest['os'] ?? null));
 
+/**
+ * Render a circular progress ring.
+ * We keep it as a helper to avoid repeating SVG boilerplate for CPU/RAM/Disk.
+ */
 function ringSvg(int $pct, string $colorClass): string
 {
   $r = 32;
@@ -120,6 +207,15 @@ function ringSvg(int $pct, string $colorClass): string
 HTML;
 }
 
+/**
+ * Print a simple key/value row.
+ * $code=true wraps the value in <code> for IDs, hashes, etc.
+ *
+ * @param string $k
+ * @param mixed $v
+ * @param bool $code
+ * @return void
+ */
 function kvRow(string $k, $v, bool $code = false): void
 {
   $v = $v === null || $v === '' ? '—' : $v;
@@ -237,10 +333,13 @@ function kvRow(string $k, $v, bool $code = false): void
 
 <script>
   (function () {
+    // Bootstrap tooltips are optional; we initialize them only when Bootstrap is present.
     function initTooltips(root = document) {
       if (!window.bootstrap) return;
       root.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => bootstrap.Tooltip.getOrCreateInstance(el));
     }
+
+    // Clipboard API fallback for non-secure contexts (or older browsers).
     async function copyText(text) {
       if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
       const ta = document.createElement('textarea');
@@ -249,6 +348,8 @@ function kvRow(string $k, $v, bool $code = false): void
       const ok = document.execCommand('copy'); document.body.removeChild(ta);
       if (!ok) throw new Error('copy failed');
     }
+
+    // Visual feedback via tooltip after copying.
     function flashTooltip(btn, msg) {
       if (!window.bootstrap) return;
       const tip = bootstrap.Tooltip.getOrCreateInstance(btn);
@@ -261,24 +362,40 @@ function kvRow(string $k, $v, bool $code = false): void
         tip.setContent({ '.tooltip-inner': 'Copy to clipboard' });
       }, 1500);
     }
+
+    // Highlight.js is optional; if available, highlight the reinstall snippet.
     function highlight(el) { if (window.hljs && el) window.hljs.highlightElement(el); }
 
     document.addEventListener('DOMContentLoaded', () => {
       initTooltips();
-      const code = document.getElementById('reinstallCmd'); highlight(code);
+
+      const code = document.getElementById('reinstallCmd');
+      highlight(code);
 
       const modal = document.getElementById('reinstallAgentModal');
-      if (modal) modal.addEventListener('shown.bs.modal', () => { highlight(code); initTooltips(modal); });
+      if (modal) {
+        modal.addEventListener('shown.bs.modal', () => {
+          highlight(code);
+          initTooltips(modal);
+        });
+      }
     });
 
+    // Copy button handler (works for any element with data-copy-target).
     document.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-copy-target]');
       if (!btn) return;
+
       const sel = btn.getAttribute('data-copy-target');
       const codeEl = sel ? document.querySelector(sel) : null;
       if (!codeEl) return;
-      try { await copyText((codeEl.innerText || codeEl.textContent || '').trim()); flashTooltip(btn, 'Copied ✅'); }
-      catch { flashTooltip(btn, 'Copy failed'); }
+
+      try {
+        await copyText((codeEl.innerText || codeEl.textContent || '').trim());
+        flashTooltip(btn, 'Copied ✅');
+      } catch {
+        flashTooltip(btn, 'Copy failed');
+      }
     });
   })();
 </script>
@@ -289,6 +406,7 @@ function kvRow(string $k, $v, bool $code = false): void
     const btn = document.getElementById('btnTogglePublic');
     if (!btn) return;
 
+    // This endpoint keeps the slug stable and only toggles enabled when the row exists.
     const endpoint = '/ajax/public.php?action=toggleEnabled'; // adjust if needed
 
     async function postForm(url, data) {
@@ -300,16 +418,22 @@ function kvRow(string $k, $v, bool $code = false): void
       return res.json();
     }
 
+    // We keep the UX simple: toggle then reload so server-derived state (slug/badges/buttons) is refreshed.
     btn.addEventListener('click', async () => {
       const id = btn.dataset.serverId;
       const enabledNow = btn.dataset.enabled === '1';
       const next = enabledNow ? 0 : 1;
 
       btn.disabled = true;
+
       try {
         const json = await postForm(endpoint, { id, enabled: next });
-        if (!json || !json.ok) return alert((json && json.error) ? json.error : 'Toggle failed');
-        window.location.reload(); // same UX as before
+        if (!json || !json.ok) {
+          alert((json && json.error) ? json.error : 'Toggle failed');
+          return;
+        }
+
+        window.location.reload();
       } catch {
         alert('Toggle failed');
       } finally {
@@ -322,6 +446,7 @@ function kvRow(string $k, $v, bool $code = false): void
 <?php if ($latest): ?>
   <div class="row g-3 mb-4">
     <?php
+    // Compute percentages for the ring widgets; values are clamped to 0..100.
     $cpuPct = ServerViewHelpers::pctVal(((float) ($latest['cpu_load'] ?? 0)) * 100);
     $ramPct = ($resources['ram_total'] ?? 0) > 0
       ? ServerViewHelpers::pctVal((nint($latest['ram_used']) / $resources['ram_total']) * 100)
@@ -337,6 +462,7 @@ function kvRow(string $k, $v, bool $code = false): void
         <div class="card-body">
           <div class="text-muted small mb-2">CPU</div>
           <?= ringSvg($cpuPct, ServerViewHelpers::ringColor($cpuPct)) ?>
+
           <?php if (!empty($latest['cpu_load_5']) || !empty($latest['cpu_load_15'])): ?>
             <div class="small text-muted mt-2">
               <?php if (!empty($latest['cpu_load_5'])): ?>5m: <?= h($latest['cpu_load_5']) ?><?php endif; ?>
@@ -381,6 +507,7 @@ function kvRow(string $k, $v, bool $code = false): void
           <div class="fw-semibold">↓ <?= Formatter::networkRxPerMinute($metricsToday) ?></div>
           <div class="fw-semibold">↑ <?= Formatter::networkTxPerMinute($metricsToday) ?></div>
           <div class="small text-muted">Live traffic (last minute)</div>
+
           <?php if (!empty($latest['public_ip'])): ?>
             <div class="small text-muted mt-2">Public IP: <code><?= h($latest['public_ip']) ?></code></div>
           <?php endif; ?>
@@ -412,9 +539,12 @@ function kvRow(string $k, $v, bool $code = false): void
             <div class="text-muted text-end me-2" style="width:24px;font-size:11px;line-height:10px;">
               <?= str_pad((string) $h, 2, '0', STR_PAD_LEFT) ?>
             </div>
+
             <div class="d-flex" style="gap:2px;">
               <?php for ($m = 0; $m < 60; $m++):
                 $state = $uptimeGrid[$h][$m] ?? 'unknown';
+
+                // Keep the palette simple: green online, red offline, yellow for unknown/future.
                 $color = match ($state) {
                   'online' => 'var(--bs-success)',
                   'offline' => 'var(--bs-danger)',
@@ -443,8 +573,11 @@ function kvRow(string $k, $v, bool $code = false): void
           kvRow('Architecture', $server['arch'] ?? '—');
           kvRow('CPU', $server['cpu_model'] ?? '—');
           kvRow('Cores', (int) ($server['cpu_cores'] ?? 0));
-          if (!empty($server['cpu_vendor']))
+
+          if (!empty($server['cpu_vendor'])) {
             kvRow('CPU Vendor', $server['cpu_vendor']);
+          }
+
           if (!empty($server['cpu_max_mhz']) || !empty($server['cpu_min_mhz'])) {
             $mhz = trim(
               (!empty($server['cpu_min_mhz']) ? 'min ' . $server['cpu_min_mhz'] : '')
@@ -452,16 +585,27 @@ function kvRow(string $k, $v, bool $code = false): void
             );
             kvRow('CPU MHz', $mhz);
           }
-          if (!empty($server['virtualization']))
+
+          if (!empty($server['virtualization'])) {
             kvRow('Virtualization', $server['virtualization']);
-          if (!empty($server['machine_id']))
+          }
+
+          if (!empty($server['machine_id'])) {
             kvRow('machine-id', $server['machine_id'], true);
-          if (!empty($server['dmi_uuid']))
+          }
+
+          if (!empty($server['dmi_uuid'])) {
             kvRow('DMI UUID', $server['dmi_uuid'], true);
-          if (!empty($server['macs']))
+          }
+
+          if (!empty($server['macs'])) {
             kvRow('MACs', $server['macs'], true);
-          if (!empty($server['fs_root']))
+          }
+
+          if (!empty($server['fs_root'])) {
             kvRow('Root FS', $server['fs_root']);
+          }
+
           kvRow('Last Seen', date('Y-m-d H:i', (int) ($server['last_seen'] ?? 0)));
           ?>
         </table>
@@ -490,7 +634,7 @@ function kvRow(string $k, $v, bool $code = false): void
         <tbody>
           <?php foreach ($ipHistory as $row): ?>
             <tr>
-              <td><code><?= h($row['ip'] ?? '') ?></code></td>
+              <td><code><?= Mask::ip(h($row['ip'] ?? '')) ?></code></td>
               <td class="text-muted"><?= date('Y-m-d H:i', (int) ($row['first_seen'] ?? 0)) ?></td>
               <td class="text-muted"><?= date('Y-m-d H:i', (int) ($row['last_seen'] ?? 0)) ?></td>
               <td class="text-end"><?= (int) ($row['seen_count'] ?? 0) ?></td>
@@ -504,7 +648,8 @@ function kvRow(string $k, $v, bool $code = false): void
 
 <?php if (!empty($disks)): ?>
   <div class="card mb-4">
-    <div class="card-header"><strong>Disks</strong>
+    <div class="card-header">
+      <strong>Disks</strong>
       <div class="text-muted small">Reported by agent (disks_json)</div>
     </div>
     <div class="card-body p-0">
@@ -534,7 +679,8 @@ function kvRow(string $k, $v, bool $code = false): void
 
 <?php if (!empty($filesystems)): ?>
   <div class="card mb-4">
-    <div class="card-header"><strong>Filesystems</strong>
+    <div class="card-header">
+      <strong>Filesystems</strong>
       <div class="text-muted small">Reported by agent (filesystems_json)</div>
     </div>
     <div class="card-body p-0">
@@ -569,7 +715,7 @@ function kvRow(string $k, $v, bool $code = false): void
 <!-- CHARTS -->
 <div class="card mb-4">
   <div class="card-header"><strong>CPU & RAM Usage</strong></div>
-  <div class="card-body" style="height:180px"><canvas id="cpuRamChart"></canvas></div>
+  <div class="card-body" style="height:300px"><canvas id="cpuRamChart"></canvas></div>
 </div>
 
 <div class="card mb-4">
@@ -577,7 +723,7 @@ function kvRow(string $k, $v, bool $code = false): void
     <strong>Network Traffic</strong>
     <div class="text-muted small">Incoming (Download) & Outgoing (Upload) traffic — MB per minute</div>
   </div>
-  <div class="card-body" style="height:180px"><canvas id="netChart"></canvas></div>
+  <div class="card-body" style="height:300px"><canvas id="netChart"></canvas></div>
 </div>
 
 <div class="card mb-4">
@@ -585,7 +731,7 @@ function kvRow(string $k, $v, bool $code = false): void
     <strong>Disk Usage</strong>
     <div class="text-muted small">Used disk space as percentage of total capacity</div>
   </div>
-  <div class="card-body" style="height:180px"><canvas id="diskChart"></canvas></div>
+  <div class="card-body" style="height:300px"><canvas id="diskChart"></canvas></div>
 </div>
 
 <script>
@@ -593,6 +739,30 @@ function kvRow(string $k, $v, bool $code = false): void
     function makeLineChart(canvasId, labels, datasets, opts) {
       const el = document.getElementById(canvasId);
       if (!el || !window.Chart) return;
+
+      // Legend helper: start from Chart.js built-in legend items, then override colors.
+      function legendLabels(chart) {
+        // Built-in generator (Chart.js 3/4)
+        const gen =
+          (Chart?.overrides?.line?.plugins?.legend?.labels?.generateLabels) ||
+          (Chart?.defaults?.plugins?.legend?.labels?.generateLabels);
+
+        const items = typeof gen === 'function'
+          ? gen(chart)
+          : (chart.legend && chart.legend.legendItems ? chart.legend.legendItems : []);
+
+        // Ensure colors come from stable dataset color
+        return items.map((it) => {
+          const ds = chart.data.datasets[it.datasetIndex] || {};
+          const c = ds._legendColor || ds._baseColor || ds.borderColor;
+          if (typeof c === 'string') {
+            it.strokeStyle = c;
+            it.fillStyle = c;
+          }
+          return it;
+        });
+      }
+
       new Chart(el, {
         type: 'line',
         data: { labels, datasets },
@@ -600,49 +770,120 @@ function kvRow(string $k, $v, bool $code = false): void
           responsive: true,
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
-          plugins: { tooltip: { enabled: true }, legend: { display: true } }
+
+          plugins: {
+            tooltip: { enabled: true },
+            legend: {
+              display: true,
+              labels: {
+                // IMPORTANT: we provide our own generator without touching global defaults
+                generateLabels: (chart) => legendLabels(chart)
+              }
+            }
+          },
+
+          // Top padding so 100% isn't glued to the edge
+          layout: { padding: { top: 10 } }
         }, opts || {})
       });
     }
 
+    const CLIP_TOP = { top: 10, left: 0, right: 0, bottom: 0 };
+
+    function dangerGradient(ctx, chartArea, baseColor) {
+      const g = ctx.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
+      g.addColorStop(0.00, baseColor);
+      g.addColorStop(0.65, '#ffc107');
+      g.addColorStop(0.85, '#fd7e14');
+      g.addColorStop(1.00, '#dc3545');
+      return g;
+    }
+
+    function dangerBorder(baseColor) {
+      return (ctx) => {
+        const chart = ctx.chart;
+        if (!chart || !chart.chartArea) return baseColor;
+        return dangerGradient(chart.ctx, chart.chartArea, baseColor);
+      };
+    }
+
+    // CPU/RAM (%)
     makeLineChart('cpuRamChart',
       <?= ChartSeries::j($cpuRamSeries['labels'] ?? []) ?>,
       [
-        { label: 'CPU', data: <?= ChartSeries::j($cpuRamSeries['cpu'] ?? []) ?>, borderColor: '#0d6efd', tension: .3, pointRadius: 0 },
-        { label: 'RAM', data: <?= ChartSeries::j($cpuRamSeries['ram'] ?? []) ?>, borderColor: '#198754', tension: .3, pointRadius: 0 }
+        {
+          label: 'CPU',
+          data: <?= ChartSeries::j($cpuRamSeries['cpu'] ?? []) ?>,
+          tension: .3,
+          pointRadius: 0,
+          borderWidth: 2,
+          clip: CLIP_TOP,
+          _legendColor: '#0d6efd',
+          borderColor: dangerBorder('#0d6efd')
+        },
+        {
+          label: 'RAM',
+          data: <?= ChartSeries::j($cpuRamSeries['ram'] ?? []) ?>,
+          tension: .3,
+          pointRadius: 0,
+          borderWidth: 2,
+          clip: CLIP_TOP,
+          _legendColor: '#198754',
+          borderColor: dangerBorder('#198754')
+        }
       ],
       {
-        plugins: { tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } } },
         scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }
       }
     );
 
+    // Network (MB/min)
     makeLineChart('netChart',
       <?= ChartSeries::j($netSeries['labels'] ?? []) ?>,
       [
-        { label: 'Download (Inbound)', data: <?= ChartSeries::j($netSeries['rx'] ?? []) ?>, borderColor: '#0d6efd', backgroundColor: 'rgba(13,110,253,0.08)', tension: .3, pointRadius: 0 },
-        { label: 'Upload (Outbound)', data: <?= ChartSeries::j($netSeries['tx'] ?? []) ?>, borderColor: '#198754', backgroundColor: 'rgba(25,135,84,0.08)', tension: .3, pointRadius: 0 }
+        {
+          label: 'Download',
+          data: <?= ChartSeries::j($netSeries['rx'] ?? []) ?>,
+          tension: .3,
+          pointRadius: 0,
+          borderWidth: 2,
+          clip: CLIP_TOP,
+          _legendColor: '#0dcaf0',
+          borderColor: dangerBorder('#0dcaf0')
+        },
+        {
+          label: 'Upload',
+          data: <?= ChartSeries::j($netSeries['tx'] ?? []) ?>,
+          tension: .3,
+          pointRadius: 0,
+          borderWidth: 2,
+          clip: CLIP_TOP,
+          _legendColor: '#6610f2',
+          borderColor: dangerBorder('#6610f2')
+        }
       ],
       {
-        scales: { y: { title: { display: true, text: 'MB per minute' }, beginAtZero: true } },
-        plugins: {
-          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} MB/min` } },
-          legend: { labels: { usePointStyle: true, boxWidth: 10 } }
-        }
+        scales: { y: { beginAtZero: true, title: { display: true, text: 'MB/min' } } }
       }
     );
 
+    // Disk (%)
     makeLineChart('diskChart',
       <?= ChartSeries::j($diskSeries['labels'] ?? []) ?>,
       [
-        { label: 'Disk Used', data: <?= ChartSeries::j($diskSeries['disk'] ?? []) ?>, borderColor: '#fd7e14', backgroundColor: 'rgba(253,126,20,0.08)', tension: .3, pointRadius: 0 }
+        {
+          label: 'Disk Used',
+          data: <?= ChartSeries::j($diskSeries['disk'] ?? []) ?>,
+          tension: .3,
+          pointRadius: 0,
+          borderWidth: 2,
+          clip: CLIP_TOP,
+          _legendColor: '#fd7e14',
+          borderColor: dangerBorder('#fd7e14')
+        }
       ],
       {
-        scales: { y: { min: 0, max: 100, title: { display: true, text: 'Disk usage (%)' }, ticks: { callback: v => v + '%' } } },
-        plugins: {
-          tooltip: { callbacks: { label: ctx => `Disk used: ${ctx.parsed.y.toFixed(1)}%` } },
-          legend: { labels: { usePointStyle: true, boxWidth: 10 } }
-        }
+        scales: { y: { min: 0, max: 100, ticks: { callback: v => v + '%' } } }
       }
     );
   })();

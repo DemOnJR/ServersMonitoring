@@ -1,16 +1,16 @@
 <?php
-/*
-|--------------------------------------------------------------------------
-| Alerts → Rules list (CONTENT ONLY)
-|--------------------------------------------------------------------------
-*/
+declare(strict_types=1);
 
-$stmt = $db->query("
-  SELECT id, title, enabled
-  FROM alerts
-  ORDER BY id DESC
-");
-$alerts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+use Alert\AlertRepository;
+
+/**
+ * Alerts list view.
+ *
+ * Renders the alerts rules list and related actions.
+ */
+
+$alertRepo = new AlertRepository($db);
+$alerts = $alertRepo->listAlerts();
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -93,7 +93,7 @@ $alerts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 </div>
 
 <script>
-  /* ---------- DATATABLE ---------- */
+  // Initialize DataTable with persisted state to keep user preferences
   $(function () {
     $('#alertsTable').DataTable({
       pageLength: 25,
@@ -109,7 +109,14 @@ $alerts = $stmt->fetchAll(PDO::FETCH_ASSOC);
     });
   });
 
-  /* ---------- DELETE ---------- */
+  /**
+   * Deletes an alert after explicit user confirmation.
+   *
+   * Uses a hard reload to ensure UI state stays consistent
+   * with server-side data after deletion.
+   *
+   * @param {number} id
+   */
   function deleteAlert(id) {
     if (!confirm('Delete this alert and all its rules?')) return;
 

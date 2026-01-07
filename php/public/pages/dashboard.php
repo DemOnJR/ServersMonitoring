@@ -5,6 +5,7 @@ use Server\ServerRepository;
 
 /* =========================================================
    DB / INSTALL GUARD
+   - Dac? schema nu exist? înc?, redirec?ioneaz? la installer
 ========================================================= */
 try {
   $db->query('SELECT 1 FROM servers LIMIT 1');
@@ -14,24 +15,37 @@ try {
 }
 
 /* =========================================================
-   LOAD SERVERS + STATS
+   LOAD SERVERS + ONLINE/OFFLINE STATS
 ========================================================= */
 $repo = new ServerRepository($db);
 $servers = $repo->fetchAllWithLastMetric();
 
 $total = count($servers);
-$online = count(array_filter($servers, fn($s) => (int) ($s['diff'] ?? 999999) < OFFLINE_THRESHOLD));
+
+// Consider?m server "online" dac? a raportat în intervalul OFFLINE_THRESHOLD
+$online = count(
+  array_filter(
+    $servers,
+    fn($s) => (int) ($s['diff'] ?? PHP_INT_MAX) < OFFLINE_THRESHOLD
+  )
+);
+
 $offline = max(0, $total - $online);
 
 /* =========================================================
-   BASE URL
+   BASE URL (pentru link-uri de instalare agent)
+   - HTTPS detectat automat
 ========================================================= */
-$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+  ? 'https'
+  : 'http';
+
 $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
 $baseUrl = $scheme . '://' . $host;
 
 /* =========================================================
-   SAFE INSTALL COMMANDS (NO PIPE)
+   SAFE INSTALL COMMANDS
+   - F?r? pipe (|) pentru a evita execu?ii nesigure
 ========================================================= */
 $linuxCmd = <<<CMD
 curl -fsSLo servermonitor-install.sh "{$baseUrl}/install/machine/?os=linux"
@@ -43,6 +57,12 @@ iwr -UseBasicParsing "{$baseUrl}/install/machine/?os=windows" -OutFile servermon
 powershell -NoProfile -ExecutionPolicy Bypass -File .\\servermonitor-install.ps1
 CMD;
 
+/**
+ * Escape HTML output.
+ *
+ * @param string $v
+ * @return string
+ */
 function e(string $v): string
 {
   return htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
@@ -51,6 +71,8 @@ function e(string $v): string
 
 <!-- SUMMARY -->
 <div class="row g-3 mb-4">
+
+  <!-- TOTAL -->
   <div class="col-md-4">
     <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
@@ -63,6 +85,7 @@ function e(string $v): string
     </div>
   </div>
 
+  <!-- ONLINE -->
   <div class="col-md-4">
     <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
@@ -75,6 +98,7 @@ function e(string $v): string
     </div>
   </div>
 
+  <!-- OFFLINE -->
   <div class="col-md-4">
     <div class="card h-100 shadow-sm">
       <div class="card-body d-flex align-items-center gap-3">
@@ -86,6 +110,7 @@ function e(string $v): string
       </div>
     </div>
   </div>
+
 </div>
 
 <!-- INSTALL AGENT -->
@@ -112,7 +137,7 @@ function e(string $v): string
       </ul>
     </div>
 
-    <!-- LINUX FORM -->
+    <!-- LINUX -->
     <div class="mb-4">
       <div class="d-flex justify-content-between align-items-center mb-2">
         <div class="fw-semibold">
@@ -127,7 +152,7 @@ function e(string $v): string
         style="background:#020617;color:#e5e7eb;white-space:pre-wrap"><?= e($linuxCmd) ?></pre>
     </div>
 
-    <!-- WINDOWS FORM -->
+    <!-- WINDOWS -->
     <div>
       <div class="d-flex justify-content-between align-items-center mb-2">
         <div class="fw-semibold">
@@ -146,6 +171,7 @@ function e(string $v): string
 </div>
 
 <script>
+  // Copiaz? comanda în clipboard ?i ofer? feedback vizual
   function copyCmd(id) {
     const el = document.getElementById(id);
     if (!el) return;
