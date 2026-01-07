@@ -1,64 +1,45 @@
 <?php
-use Utils\Mask;
+declare(strict_types=1);
 
-/*
-|--------------------------------------------------------------------------
-| Alerts → Rule edit (CONTENT ONLY)
-|--------------------------------------------------------------------------
-*/
+use Utils\Mask;
+use Alert\AlertRepository;
+use Alert\AlertRuleRepository;
+use Server\ServerRepository;
+
+/**
+ * Alert rule editor view.
+ *
+ * Loads alert data (when editing) and renders the UI for managing Discord rules.
+ * This file intentionally contains only orchestration + rendering logic;
+ * all persistence is delegated to repositories / ajax endpoints.
+ */
 
 $id = (int) ($_GET['id'] ?? 0);
 
-/* =========================
-   LOAD SERVERS
-========================= */
-$servers = $db->query("
-  SELECT
-    id,
-    hostname,
-    display_name,
-    ip
-  FROM servers
-  ORDER BY COALESCE(display_name, hostname)
-")->fetchAll(PDO::FETCH_ASSOC);
+$alertRepo = new AlertRepository($db);
+$ruleRepo = new AlertRuleRepository($db);
+$serverRepo = new ServerRepository($db);
 
-/* =========================
-   DEFAULT ALERT
-========================= */
-$alert = [
+// Populate the multi-select with server display labels (masked IP for UI).
+$servers = $serverRepo->listForSelect();
+
+// Default values used when creating a new alert (so the template can remain simple).
+$alertDefault = [
   'title' => '',
   'description' => '',
   'enabled' => 1,
 ];
 
-/* =========================
-   LOAD ALERT + RULES
-========================= */
+$alert = $alertDefault;
 $rules = [];
 
+// Only hit the DB when editing an existing alert; new alerts should render empty form state.
 if ($id > 0) {
-  $stmt = $db->prepare("SELECT * FROM alerts WHERE id = ?");
-  $stmt->execute([$id]);
-  $alert = $stmt->fetch(PDO::FETCH_ASSOC) ?: $alert;
-
-  $stmt = $db->prepare("
-    SELECT
-      r.*,
-      GROUP_CONCAT(t.server_id) AS servers,
-      c.config_json AS channel_config
-    FROM alert_rules r
-    LEFT JOIN alert_rule_targets t ON t.rule_id = r.id
-    LEFT JOIN alert_rule_channels rc ON rc.rule_id = r.id
-    LEFT JOIN alert_channels c ON c.id = rc.channel_id
-    WHERE r.alert_id = ?
-    GROUP BY r.id
-    ORDER BY r.id ASC
-  ");
-  $stmt->execute([$id]);
-  $rules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+  $alert = $alertRepo->findById($id) ?: $alertDefault;
+  $rules = $ruleRepo->listByAlertIdWithTargetsAndChannel($id);
 }
 
-/* defaults for UI placeholders */
+// Server-side defaults for placeholders; keep these in sync with RULE_DEFAULTS in JS.
 $metricDefaults = [
   'cpu' => ['title' => 'CPU usage high', 'description' => 'CPU usage exceeded the configured threshold.'],
   'ram' => ['title' => 'RAM usage high', 'description' => 'Memory usage exceeded the configured threshold.'],
@@ -124,10 +105,14 @@ $metricDefaults = [
       <div id="rules">
 
         <?php foreach ($rules as $r):
+          // Rule->servers comes as "1,2,3" from GROUP_CONCAT; split for multi-select preselection.
           $selectedServers = $r['servers'] ? explode(',', (string) $r['servers']) : [];
+
+          // Channel config is stored as JSON so new channels can be extended without schema changes.
           $cfg = json_decode((string) ($r['channel_config'] ?? '{}'), true) ?: [];
           $webhook = (string) ($cfg['webhook'] ?? '');
 
+          // Default placeholder text depends on the selected metric, but should never overwrite user inputs.
           $metric = (string) ($r['metric'] ?? 'ram');
           $defTitle = $metricDefaults[$metric]['title'] ?? 'Alert triggered';
           $defDesc = $metricDefaults[$metric]['description'] ?? 'A threshold was exceeded.';
@@ -143,7 +128,7 @@ $metricDefaults = [
                 <div class="col-md-4">
                   <label class="form-label">Alert Color</label>
                   <input type="color" class="form-control form-control-color" name="rule_color[]"
-                    value="<?= $r['color'] ? sprintf('#%06X', $r['color']) : '#e74c3c' ?>">
+                    value="<?= $r['color'] ? sprintf('#%06X', (int) $r['color']) : '#e74c3c' ?>">
                 </div>
 
                 <div class="col-md-4">
@@ -204,7 +189,7 @@ $metricDefaults = [
                 <div class="col-md-6">
                   <label class="form-label">Mentions</label>
                   <input class="form-control" name="rule_mentions[]"
-                    value="<?= htmlspecialchars((string) $r['mentions']) ?>">
+                    value="<?= htmlspecialchars((string) ($r['mentions'] ?? '')) ?>">
                 </div>
 
                 <div class="col-md-12">
@@ -249,7 +234,7 @@ $metricDefaults = [
 </div>
 
 <script>
-  // defaults used client-side when user adds new rules
+  // Keep a single source of truth for placeholders so UI stays consistent across server/client rendering.
   const RULE_DEFAULTS = {
     cpu: { title: 'CPU usage high', description: 'CPU usage exceeded the configured threshold.' },
     ram: { title: 'RAM usage high', description: 'Memory usage exceeded the configured threshold.' },
@@ -266,6 +251,7 @@ $metricDefaults = [
   }
 
   function newRuleKey() {
+    // Use a unique key to map server selections for rules that don't exist in DB yet.
     return 'new_' + Date.now() + '_' + Math.random().toString(16).slice(2);
   }
 
@@ -374,7 +360,7 @@ $metricDefaults = [
     `);
   }
 
-  // update placeholders based on metric
+  // Update placeholders only when inputs are empty to avoid overwriting user-provided values.
   document.addEventListener('change', (e) => {
     const sel = e.target.closest('.metric-select');
     if (!sel) return;
@@ -390,14 +376,14 @@ $metricDefaults = [
     if (descInput && !descInput.value.trim()) descInput.placeholder = def.description;
   });
 
-  // remove NEW rule card locally (not in DB)
+  // Remove only local (unsaved) rules to avoid accidental destructive server-side actions.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.remove-local');
     if (!btn) return;
     btn.closest('.rule').remove();
   });
 
-  // delete existing rule from DB
+  // Require explicit confirmation because this is an irreversible DB operation.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.delete-rule');
     if (!btn) return;
@@ -418,7 +404,7 @@ $metricDefaults = [
       .catch(() => showAlert('Network error', 'danger'));
   });
 
-  // test discord webhook
+  // Provide a fast feedback loop so users can validate the webhook without saving the whole form.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.test-discord');
     if (!btn) return;
@@ -440,7 +426,6 @@ $metricDefaults = [
       .catch(() => showAlert('Network error', 'danger'));
   });
 
-  // save
   document.getElementById('alertForm').addEventListener('submit', (e) => {
     e.preventDefault();
 
@@ -457,7 +442,7 @@ $metricDefaults = [
 
         showAlert('Alert saved', 'success');
 
-        // if it was a new alert, redirect to edit page with the new id
+        // Redirect after save to avoid duplicate submissions on refresh and to reflect the canonical URL for the resource.
         if (d.alertId && (<?= (int) $id ?> <= 0)) {
           setTimeout(() => {
             location.href = '/?page=alerts-edit&id=' + d.alertId;
@@ -465,7 +450,6 @@ $metricDefaults = [
           return;
         }
 
-        // otherwise go back to rules list
         setTimeout(() => {
           location.href = '/?page=alerts-rules';
         }, 600);

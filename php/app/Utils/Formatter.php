@@ -3,14 +3,26 @@ declare(strict_types=1);
 
 namespace Utils;
 
+/**
+ * Provides common formatting helpers for UI output.
+ *
+ * Includes duration, byte/unit formatting, percentages, and network throughput helpers.
+ */
 final class Formatter
 {
+    /**
+     * Prevents instantiation; this class exposes only static helpers.
+     */
     private function __construct()
     {
     }
 
     /**
-     * Format duration (seconds ? 1d 2h 3m)
+     * Formats a duration in seconds as "Xd Xh Xm".
+     *
+     * @param int $seconds Duration in seconds.
+     *
+     * @return string Human-readable duration.
      */
     public static function duration(int $seconds): string
     {
@@ -26,7 +38,11 @@ final class Formatter
     }
 
     /**
-     * Format bytes ? MB / GB / TB
+     * Formats a byte value into B/KB/MB/GB/TB.
+     *
+     * @param float $bytes Bytes value.
+     *
+     * @return string Human-readable bytes string.
      */
     public static function bytes(float $bytes): string
     {
@@ -40,12 +56,16 @@ final class Formatter
         return round($bytes / (1024 ** $i), 2) . ' ' . $units[$i];
     }
 
-
     /**
-     * Format memory stored in MB
+     * Format memory stored in MB.
+     *
+     * @param int|float $mb
+     * @return string
      */
-    public static function bytesMB(int $mb): string
+    public static function bytesMB(int|float $mb): string
     {
+        $mb = (float) $mb;
+
         if ($mb <= 0) {
             return '0 MB';
         }
@@ -53,12 +73,16 @@ final class Formatter
         return match (true) {
             $mb >= 1024 * 1024 => round($mb / (1024 * 1024), 2) . ' TB',
             $mb >= 1024 => round($mb / 1024, 1) . ' GB',
-            default => $mb . ' MB'
+            default => (string) ((int) round($mb)) . ' MB',
         };
     }
 
     /**
-     * Format disk stored in KB
+     * Formats disk usage stored in KB into GB/TB.
+     *
+     * @param int $kb Disk value in KB.
+     *
+     * @return string Human-readable disk string.
      */
     public static function diskKB(int $kb): string
     {
@@ -74,7 +98,11 @@ final class Formatter
     }
 
     /**
-     * Format percent (1 decimal)
+     * Formats a percentage value with one decimal.
+     *
+     * @param float $value Percentage value.
+     *
+     * @return string Formatted percentage string.
      */
     public static function pct(float $value): string
     {
@@ -82,19 +110,23 @@ final class Formatter
     }
 
     /**
-     * CPU load (0..n ? %)
+     * Converts CPU load (0..n) into a percentage string.
+     *
+     * @param float $load CPU load value.
+     *
+     * @return string CPU percentage string.
      */
     public static function cpuPct(float $load): string
     {
         return self::pct($load * 100);
     }
 
-    /* ==================================================
-       NETWORK FORMATTERS (AUTO DELTA)
-    ================================================== */
-
     /**
-     * RX traffic per minute (human readable)
+     * Formats RX throughput per minute based on the last two samples.
+     *
+     * @param array<int, array<string, mixed>> $metrics Metric snapshots ordered by time.
+     *
+     * @return string Human-readable throughput string.
      */
     public static function networkRxPerMinute(array $metrics): string
     {
@@ -104,7 +136,11 @@ final class Formatter
     }
 
     /**
-     * TX traffic per minute (human readable)
+     * Formats TX throughput per minute based on the last two samples.
+     *
+     * @param array<int, array<string, mixed>> $metrics Metric snapshots ordered by time.
+     *
+     * @return string Human-readable throughput string.
      */
     public static function networkTxPerMinute(array $metrics): string
     {
@@ -114,7 +150,11 @@ final class Formatter
     }
 
     /**
-     * Format bytes per minute ? KB / MB / GB
+     * Formats bytes per minute into KB/min, MB/min or GB/min.
+     *
+     * @param int|float $bytes Bytes per minute.
+     *
+     * @return string Human-readable throughput string.
      */
     public static function bytesPerMinute(int|float $bytes): string
     {
@@ -140,7 +180,14 @@ final class Formatter
     }
 
     /**
-     * INTERNAL: calculate RX/TX delta between last 2 samples
+     * Computes RX/TX delta between the last two snapshots.
+     *
+     * Negative deltas are clamped to 0 to handle counter resets.
+     *
+     * @param array<int, array<string, mixed>> $metrics Metric snapshots ordered by time.
+     * @param string $key Counter key (e.g. rx_bytes, tx_bytes).
+     *
+     * @return int Delta bytes for the last interval.
      */
     private static function networkDelta(array $metrics, string $key): int
     {

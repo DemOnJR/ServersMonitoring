@@ -3,6 +3,7 @@ use Auth\Guard;
 use Server\ServerRepository;
 use Server\PublicPageRepository;
 
+// This page is admin-only because it controls what data becomes publicly accessible.
 Guard::protect();
 
 $id = (int) ($_GET['id'] ?? 0);
@@ -12,6 +13,8 @@ if ($id <= 0) {
 }
 
 $serverRepo = new ServerRepository($db);
+
+// We load the server first to ensure the UI shows the correct entity and to avoid generating settings for unknown ids.
 $server = $serverRepo->findById($id);
 if (!$server) {
   echo '<div class="alert alert-danger">Server not found</div>';
@@ -19,8 +22,11 @@ if (!$server) {
 }
 
 $publicRepo = new PublicPageRepository($db);
+
+// Settings are always returned in a UI-friendly shape so the view can be rendered without extra null checks.
 $pub = $publicRepo->getSettingsOrDefaults($id);
 
+// Derived helpers keep URL generation rules centralized and consistent across pages.
 $publicUrl = $publicRepo->publicUrlFromSlug($pub['slug'] ?? '');
 $slugForInput = $publicRepo->slugBaseForInput((string) ($pub['slug'] ?? ''), $id);
 
@@ -233,7 +239,7 @@ $serverName = htmlspecialchars($server['display_name'] ?: $server['hostname']);
 
       const fd = new FormData(form);
 
-      // unchecked checkboxes not included -> send 0
+      // Unchecked checkboxes are not included by default, so we send explicit 0 values for deterministic saves.
       ['enabled', 'is_private', 'show_cpu', 'show_ram', 'show_disk', 'show_network', 'show_uptime'].forEach(k => {
         if (!fd.has(k)) fd.append(k, '0');
       });
@@ -254,7 +260,7 @@ $serverName = htmlspecialchars($server['display_name'] ?: $server['hostname']);
 
         flash('Saved ✓', true);
 
-        // refresh so the URL preview updates if slug changed
+        // Refresh so the URL preview updates if slug changed and to keep UI in sync with persisted values.
         setTimeout(() => {
           location.href = '/?page=public&id=' + encodeURIComponent(fd.get('id'));
         }, 250);
