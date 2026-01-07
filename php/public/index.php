@@ -166,7 +166,7 @@ $isAlerts = str_starts_with($page, 'alerts');
   <div class="d-flex min-vh-100">
 
     <!-- SIDEBAR -->
-    <aside class="sidebar p-3 bg-body-tertiary">
+    <aside class="sidebar p-3 bg-body-tertiary d-flex flex-column">
 
       <div class="fw-semibold mb-3">
         <i class="fa-solid fa-gauge-high me-1"></i>
@@ -211,17 +211,26 @@ $isAlerts = str_starts_with($page, 'alerts');
           </div>
         <?php endif; ?>
 
-      </nav>
+        </nav>
 
-      <hr class="mt-4">
+        <!-- PUSHES BUTTONS TO BOTTOM -->
+       <d iv class="mt-auto">
 
-      <a href="/logout.php" class="btn btn-sm btn-outline-secondary w-100">
-        <i class="fa-solid fa-right-from-bracket me-1"></i>
-        Logout
-      </a>
+          <hr>
+
+           <a  href="/docs" class="btn btn-sm btn-outline-secondary w-100 mb-2">
+            <i class="fa-solid fa-book me-1"></i>
+          Docs
+          </a>
+
+           <a  href="/logout.php" class="btn btn-sm btn-outline-secondary w-100">
+            <i class="fa-solid fa-right-from-bracket me-1"></i>
+          Logout
+          </a>
+
+      </div>
 
     </aside>
-
 
     <!-- CONTENT -->
     <main class="flex-grow-1 p-4">
