@@ -46,4 +46,4 @@ jobs:
           context: .
           push: true
           tags: |
-            pbdaemon/serversmonitoring:${{ steps.ver.outputs.tag }}
+            pbdaemon/serversmonitoring:latest
