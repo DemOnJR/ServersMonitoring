@@ -1,4 +1,4 @@
-name: Manual build & push (use latest git tag)
+name: Build & Push (Docker Hub) - Manual
 
 on:
   workflow_dispatch:
