@@ -1,0 +1,18 @@
+services:
+  web:
+    build: .
+    ports:
+      - "80:80"
+    volumes:
+      # codul tău local -> live în container
+      - ./php:/var/www/html
+      # păstrează db + sessions ca volum separat (să nu te lovești de permisiuni / suprascrieri)
+      - storage_db:/var/www/html/storage/db
+      - storage_sessions:/var/www/html/storage/sessions
+    environment:
+      # opțional, util dacă folosești opcache și vrei să fie sigur OFF în dev
+      - PHP_OPCACHE_ENABLE=0
+
+volumes:
+  storage_db:
+  storage_sessions:
