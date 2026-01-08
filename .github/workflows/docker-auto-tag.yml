@@ -1,4 +1,4 @@
-name: Build & Push (Docker Hub)
+name: Build & Push (Docker Hub) - Automatic by Tag Release
 
 on:
   push:
