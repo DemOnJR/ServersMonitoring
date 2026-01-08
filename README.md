@@ -34,25 +34,26 @@ The project is intentionally minimal, focused on stability and clarity rather th
 
 Before you install Server Monitor, make sure your environment meets the following requirements:
 
-* **PHP 8.4**
-* **PHP SQLite extension enabled** (`pdo_sqlite`)
-* A web server (Apache or Nginx)
-* A Linux-based system (recommended)
-* Cron enabled (required for the monitoring agent)
+* **Docker**
 
-No external database such as MySQL or PostgreSQL is required.
+## Install
+How to install our app:
+```bash
+docker pull pbdaemon/serversmonitoring:latest
+```
+
+You can also use older versions from 1.0.5 example:
+```bash
+docker pull pbdaemon/serversmonitoring:1.0.5
+```
 
 ---
 
-## Installation (Web Installer)
+## Configuration
 
 Server Monitor includes a built-in web installer that guides you through the setup.
 
-### Step 1: Upload the files
-
-Upload all project files (from php or nodejs, ecc. directory) to your web server directory (for example `public_html`).
-
-### Step 2: Run the installer
+### Step 1: Run the installer
 
 Open the installer in your browser:
 
@@ -67,64 +68,13 @@ The installer will:
 * Secure the database directory
 * Prepare the application for first use
 
-### Step 3: Access the dashboard
+### Step 2: Access the dashboard
 
 After installation completes, you will be redirected automatically to the login page or you can go to:
 
 ```
 https://your-website-url/
 ```
-
----
-
-## Monitoring Agent Installation
-
-Once the web interface is installed, you can start monitoring servers by installing the agent.
-
-Run the following command on each server you want to monitor:
-
-Linux
-```bash
-curl -fsSLo servermonitor-install.sh "http://localhost/install/machine/?os=linux"
-sudo bash servermonitor-install.sh
-```
-
-Windows
-```bash
-iwr -UseBasicParsing "http://localhost/install/machine/?os=windows" -OutFile servermonitor-install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\servermonitor-install.ps1
-```
-
-The agent will:
-
-* Collect system metrics
-* Send data to your dashboard every minute
-* Start automatically on reboot
-
----
-
-## Key Features
-
-When you use Server Monitor, you get:
-
-* A lightweight monitoring agent
-* A centralized web dashboard
-* CPU, memory, disk, network, and process metrics
-* SQLite database with no external dependencies
-* Automatic installer and updater
-* Secure-by-default filesystem permissions
-* Full self-hosting control
-
----
-
-## Architecture
-
-Your setup consists of the following components:
-
-* **Agent:** Bash-based script running via cron on each monitored server
-* **Backend:** PHP application using SQLite
-* **Frontend:** Bootstrap-based dashboard with charts
-* **Database:** Local SQLite database optimized for single-user use
 
 ---
 
@@ -145,23 +95,6 @@ Your setup consists of the following components:
 <!-- CHANGELOG:END -->
 
 > For the full history, see the [Changelog](CHANGELOG.md).
-
----
-
-## Hosted Version
-
-If you prefer a managed solution, a hosted multi-user version is planned.
-
-The hosted version will provide:
-
-* Multi-user access
-* Centralized account management
-* Extended data retention and analytics
-* Managed infrastructure
-
-The hosted service will not be open source and will be governed by separate Terms of Service.
-
-More details will be announced later.
 
 ---
 
