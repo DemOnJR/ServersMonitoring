@@ -40,4 +40,4 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/pbdaemon/serversmonitoring:${{ steps.vars.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/serversmonitoring:${{ steps.vars.outputs.version }}
