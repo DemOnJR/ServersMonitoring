@@ -4,17 +4,6 @@ declare(strict_types=1);
 use Server\ServerRepository;
 
 /* =========================================================
-   DB / INSTALL GUARD
-   - Dac? schema nu exist? înc?, redirec?ioneaz? la installer
-========================================================= */
-try {
-  $db->query('SELECT 1 FROM servers LIMIT 1');
-} catch (Throwable) {
-  header('Location: /install/index.php');
-  exit;
-}
-
-/* =========================================================
    LOAD SERVERS + ONLINE/OFFLINE STATS
 ========================================================= */
 $repo = new ServerRepository($db);
