@@ -34,6 +34,31 @@ $db->exec('PRAGMA foreign_keys = ON;');
 $db->exec('PRAGMA synchronous = NORMAL;');
 $db->exec('PRAGMA busy_timeout = 5000;');
 
+/**
+ * Redirect user to installer when DB is missing / schema not ready.
+ */
+$installerUrl = '/install/web/index.php';
+
+// Avoid redirect loop if we're already in installer
+$requestUri = $_SERVER['REQUEST_URI'] ?? '';
+if (str_starts_with($requestUri, '/install/')) {
+  // continue bootstrap without guarding
+} else {
+  try {
+    // If table doesn't exist, this will throw (with ERRMODE_EXCEPTION)
+    $stmt = $db->query('SELECT 1 FROM servers LIMIT 1');
+
+    // Extra safety: some wrappers/drivers may still return false
+    if ($stmt === false) {
+      header('Location: ' . $installerUrl, true, 302);
+      exit;
+    }
+  } catch (Throwable) {
+    header('Location: ' . $installerUrl, true, 302);
+    exit;
+  }
+}
+
 // Enforce secure session behavior to reduce fixation and hijacking risk.
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');

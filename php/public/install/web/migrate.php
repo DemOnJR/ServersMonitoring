@@ -1,7 +1,34 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../../App/Bootstrap.php';
+// Minimal bootstrap for installer only.
+// Loads config + autoloader + DB connection. No session, no redirects.
+
+require_once __DIR__ . '/../../../config/config.php';
+
+spl_autoload_register(function (string $class): void {
+    $file = __DIR__ . '/../../../App/' . str_replace('\\', '/', $class) . '.php';
+    if (is_file($file)) {
+        require_once $file;
+    }
+});
+
+use Database\PDO;
+
+try {
+    $db = new PDO('sqlite:' . DB_PATH);
+
+    // Critical: ensure errors throw exceptions
+    $db->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+} catch (Throwable $e) {
+    http_response_code(500);
+    exit('Database connection failed: ' . $e->getMessage());
+}
+
+$db->exec('PRAGMA journal_mode = WAL;');
+$db->exec('PRAGMA foreign_keys = ON;');
+$db->exec('PRAGMA synchronous = NORMAL;');
+$db->exec('PRAGMA busy_timeout = 5000;');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(403);
@@ -10,17 +37,75 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $action = $_POST['action'] ?? '';
 
+/**
+ * Applies all pending SQL migrations from SQL_UPDATES.
+ *
+ * @param \PDO $db
+ * @return array{applied: int, messages: array<int, string>}
+ * @throws \Throwable
+ */
+function applyMigrations(\PDO $db): array
+{
+    $messages = [];
+
+    // Ensure migrations table exists
+    $db->exec("
+    CREATE TABLE IF NOT EXISTS db_migrations (
+      version TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )
+  ");
+
+    // Already applied
+    $applied = $db->query("SELECT version FROM db_migrations")
+        ->fetchAll(\PDO::FETCH_COLUMN);
+
+    $applied = array_flip($applied ?: []);
+
+    $files = glob(SQL_UPDATES . '/*.sql') ?: [];
+    sort($files, SORT_NATURAL);
+
+    $count = 0;
+
+    if (!$files) {
+        $messages[] = "No updates found";
+        return ['applied' => 0, 'messages' => $messages];
+    }
+
+    foreach ($files as $file) {
+        $version = basename($file, '.sql');
+
+        if (isset($applied[$version])) {
+            continue;
+        }
+
+        $messages[] = "Applying {$version}...";
+
+        $sql = file_get_contents($file);
+        if ($sql === false || trim($sql) === '') {
+            throw new Exception("Empty migration: {$version}");
+        }
+
+        $db->exec($sql);
+
+        $stmt = $db->prepare("
+      INSERT INTO db_migrations (version, applied_at)
+      VALUES (?, datetime('now'))
+    ");
+        $stmt->execute([$version]);
+
+        $messages[] = "{$version} OK";
+        $count++;
+    }
+
+    return ['applied' => $count, 'messages' => $messages];
+}
+
 /* -------------------------------------------------
    WRITE PASSWORD (config.local.php)
 ------------------------------------------------- */
 if ($action === 'password') {
     $pass = $_POST['password'] ?? '';
-
-    /* if (strlen($pass) < 8) {
-        echo "Password too short\n";
-        exit;
-    } */
-
     $hash = password_hash($pass, PASSWORD_DEFAULT);
 
     $file = __DIR__ . '/../../../config/config.local.php';
@@ -40,25 +125,29 @@ PHP;
 }
 
 /* -------------------------------------------------
-   INSTALL SCHEMA (FIRST TIME)
+   INSTALL + AUTO-UPDATE
 ------------------------------------------------- */
 if ($action === 'install') {
     try {
         $db->beginTransaction();
 
         $schema = file_get_contents(SQL_SCHEMA);
-        if (!$schema) {
-            throw new Exception('schema.sql missing');
+        if ($schema === false || trim($schema) === '') {
+            throw new Exception('schema.sql missing or empty');
         }
 
         $db->exec($schema);
 
+        // Ensure migrations table exists even if schema.sql didn't include it
         $db->exec("
-            CREATE TABLE IF NOT EXISTS db_migrations (
-                version TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-        ");
+      CREATE TABLE IF NOT EXISTS db_migrations (
+        version TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      )
+    ");
+
+        // Apply updates immediately (still inside same transaction)
+        $result = applyMigrations($db);
 
         $db->commit();
 
@@ -66,9 +155,14 @@ if ($action === 'install') {
         touch(__DIR__ . '/.installed');
 
         echo "Install complete\n";
-
+        foreach ($result['messages'] as $m) {
+            echo $m . "\n";
+        }
+        echo "Auto-updates applied: {$result['applied']}\n";
     } catch (Throwable $e) {
-        $db->rollBack();
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
         echo "FAILED: {$e->getMessage()}\n";
     }
 
@@ -82,58 +176,18 @@ if ($action === 'update') {
     try {
         $db->beginTransaction();
 
-        // Ensure migrations table exists
-        $db->exec("
-            CREATE TABLE IF NOT EXISTS db_migrations (
-                version TEXT PRIMARY KEY,
-                applied_at TEXT NOT NULL
-            )
-        ");
-
-        // Get already applied migrations
-        $applied = $db->query("
-            SELECT version FROM db_migrations
-        ")->fetchAll(PDO::FETCH_COLUMN);
-
-        $applied = array_flip($applied);
-
-        $files = glob(SQL_UPDATES . '/*.sql');
-        sort($files, SORT_NATURAL);
-
-        if (!$files) {
-            echo "No updates found\n";
-        }
-
-        foreach ($files as $file) {
-            $version = basename($file, '.sql');
-
-            if (isset($applied[$version])) {
-                continue;
-            }
-
-            echo "Applying {$version}...\n";
-
-            $sql = file_get_contents($file);
-            if (!$sql) {
-                throw new Exception("Empty migration: {$version}");
-            }
-
-            $db->exec($sql);
-
-            $stmt = $db->prepare("
-                INSERT INTO db_migrations (version, applied_at)
-                VALUES (?, datetime('now'))
-            ");
-            $stmt->execute([$version]);
-
-            echo "{$version} OK\n";
-        }
+        $result = applyMigrations($db);
 
         $db->commit();
-        echo "Update complete\n";
 
+        foreach ($result['messages'] as $m) {
+            echo $m . "\n";
+        }
+        echo "Update complete\n";
     } catch (Throwable $e) {
-        $db->rollBack();
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
         echo "UPDATE FAILED: {$e->getMessage()}\n";
     }
 

@@ -95,6 +95,8 @@ $alerts = $alertRepo->listAlerts();
 <script>
   // Initialize DataTable with persisted state to keep user preferences
   $(function () {
+    if (!hasAlerts) return;
+
     $('#alertsTable').DataTable({
       pageLength: 25,
       order: [[0, 'asc']],

@@ -57,7 +57,7 @@ Upload all project files (from php or nodejs, ecc. directory) to your web server
 Open the installer in your browser:
 
 ```
-https://your-website-url/install
+https://your-website-url/install/web/
 ```
 
 The installer will:
@@ -83,8 +83,16 @@ Once the web interface is installed, you can start monitoring servers by install
 
 Run the following command on each server you want to monitor:
 
+Linux
 ```bash
-curl -fsSL https://your-website-url/install.sh | sudo bash -s -- https://your-website-url
+curl -fsSLo servermonitor-install.sh "http://localhost/install/machine/?os=linux"
+sudo bash servermonitor-install.sh
+```
+
+Windows
+```bash
+iwr -UseBasicParsing "http://localhost/install/machine/?os=windows" -OutFile servermonitor-install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\servermonitor-install.ps1
 ```
 
 The agent will:
@@ -123,14 +131,15 @@ Your setup consists of the following components:
 ## Latest Release
 
 <!-- CHANGELOG:START -->
-## [v1.0.4] - 2025-12-18 20:46
+## [v1.0.5] - 2026-01-07 16:00
 
 ### Added
-- Simple Login
-- Windows support
-- Discord alerts
-- New server page (graphs, ecc)
-- New servers page (delete option)
+- v1 service monitoring
+- docs
+- code cleaning
+- other optimizations
+- v1 public page added
+
 ---
 
 <!-- CHANGELOG:END -->
